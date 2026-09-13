@@ -7,4 +7,5 @@ runs/
 checkpoints/
 *.npz
 *.pt
+!models/*.pt
 .pytest_cache/

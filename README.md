@@ -30,12 +30,18 @@ sevenwa arena --a net:runs/v1/ckpt/champion.pt:200 --b rollout:200:1 --games 40
 sevenwa arena --a hybrid:runs/v1/ckpt/champion.pt:200:0.5 --b heuristic --games 40
 ```
 
-## Agent ladder (weakest to strongest as measured during development)
+## Agent ladder (measured during development, see `docs/TRAINING.md`)
 
-`random` → `netraw:<ckpt>` (policy head alone) → `net:<ckpt>:<sims>` (young network) →
-`heuristic` ≈ `rollout:64:1` → `rollout:200:1` / `hybrid:<ckpt>:<sims>:<lam>`.  The neural agent
-overtakes the classical ones only after enough self-play data; `docs/TRAINING.md` explains the
-measurements and the training regime that avoids replay-window overfitting.
+`random` ≪ `heuristic` ≈ `rollout:64:1` ≈ `rollout:200:1` < `netraw:models/imitation_v3.pt`
+(55 % vs heuristic, no search) < **`net:models/imitation_v3.pt:300`** (67 % vs heuristic,
+83 % vs rollout-200).  The shipped checkpoint comes from the imitation bootstrap (20 000 fast
+heuristic games) and is the starting point for the self-play pipeline; pure self-play from a
+random or tiny bootstrap over-fits its replay window on a small budget, which
+`docs/TRAINING.md` documents together with the regime that avoids it.
+
+```bash
+sevenwa play --ai net:models/imitation_v3.pt:300      # play the strongest shipped agent
+```
 
 ## Layout
 

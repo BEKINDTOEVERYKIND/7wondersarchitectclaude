@@ -116,6 +116,60 @@ i.e. a window of ~2000 games, half a pass per generation (every sample is seen ~
 its life in the window, spread over 30 different champions), dropout + weight decay, and a soft
 gate.  With more cores, raise `--games` first (data diversity), then `--sims`.
 
-## Results of the reference runs
+## Imitation bootstrap (recommended start)
 
-_(see below)_
+`scripts/imitation_bootstrap.py` (or `sevenwa pipeline --bootstrap-mode imitation`) generates
+ε-greedy heuristic self-play at ~60 games/s per process and trains the network on the
+heuristic's *soft* policy (`heuristic_prior`) plus the real outcomes.  20 000 games (1.2 M
+samples, 2.5 min on 3 workers) give, on 1 000 held-out games:
+
+| epochs | policy CE | policy acc | value MSE | train/held-out gap |
+|---|---|---|---|---|
+| 0.5 | 0.923 | 71.5 % | 0.790 | none |
+| 2.0 | 0.871 | 77.7 % | 0.795 | none |
+
+The value head generalises here (0.79 versus ≥ 0.9 from pure self-play data), because 20 000
+games contain the outcome variety that 2 000 do not.  Self-play then starts from a network that
+is already a competent player instead of from random play (`runs/v3`).
+
+## Results of the reference runs (4-core CPU, single afternoon)
+
+Arena results are wins-losses-draws for the first-named agent, seats alternated, with the
+95 % Wilson interval in brackets; the heuristic is the reference (it beats random 97 %).
+
+| Agent | vs heuristic | Note |
+|---|---|---|
+| `rollout:64:1` (64 heuristic playouts) | 5-7 (42 %) | classical search ≈ its playout policy |
+| `rollout:200:1` | 6-6 (50 %) | |
+| `net:v1:64` after 33 self-play generations from a 96-game rollout bootstrap | 4-16 … 8-12 (20–40 %) | value head over-fitted the replay window |
+| `net:v1:300` | 6-14 (30 %) | more search cannot repair a misleading value |
+| `hybrid:v1:100:0.5` | 3-9 (25 %) | |
+| `netraw:v3` (imitation network, **no search**) | **55-45 (55 % [45–64])**, 100 games | already ≥ its teacher |
+| `net:v3:100` (imitation network + 100-simulation MCTS) | **15-9 (62 % [43–79])** | strongest agent so far |
+| `hybrid:v3:100:0.5` | 9-7 (56 %) | playout blending no longer needed |
+
+| `net:v3:300` | **16-8 (67 % [47–82])** | |
+| `net:v3:200` vs `rollout:200:1` | **10-2 (83 % [55–95])** | |
+
+The shipped checkpoint `models/imitation_v3.pt` is this network (imitation bootstrap, 2 epochs);
+`sevenwa play --ai net:models/imitation_v3.pt:300` plays it.
+
+Continuing self-play from it (`runs/v3`, window 30, 0.5 epochs/generation, lr 3e-4) keeps the
+fresh-generation value loss at 0.71–0.90 (vs 1.3–1.8 in the over-fitted v1 run) and policy
+accuracy on fresh data at 56–61 %.  In the first generations the gate rejected most candidates at
+~43 %: self-play fine-tuning first has to reconcile the imitation policy with the search's
+targets, and with 30-game gates the promotion decision is noisy.  This is the point at which
+compute matters: the pipeline is doing the right thing, and more games per generation
+(`--games 256+` on a bigger machine) and more generations are what turn the imitation-level
+network into a super-heuristic one.
+
+### Reproducing
+
+```
+python scripts/imitation_bootstrap.py --run-dir runs/v3 --games 20000 --holdout-games 1000
+mv runs/v3/data/gen0000_*.npz runs/v3/imitation/          # keep imitation data out of the replay window
+sevenwa pipeline --run-dir runs/v3 --games 64 --sims 96 --root-mode gumbel --bootstrap-games 0 \
+    --window 30 --epochs 0.5 --lr 3e-4 --weight-decay 1e-4 --dropout 0.1 --gate-threshold 0.5
+sevenwa arena --a net:runs/v3/ckpt/champion.pt:300 --b heuristic --games 40
+python scripts/learning_curve.py runs/v3/metrics.jsonl
+```
