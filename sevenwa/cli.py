@@ -25,7 +25,7 @@ def cmd_pipeline(args):
                          bootstrap_mode=args.bootstrap_mode, bootstrap_epochs=args.bootstrap_epochs,
                          window_generations=args.window, num_workers=args.workers, seed=args.seed,
                          net_width=args.width, net_depth=args.depth, net_trunk=args.trunk, net_dropout=args.dropout,
-                         selfplay=SelfPlayConfig(num_simulations=args.sims, temperature_moves=args.temp_moves, root_mode=args.root_mode),
+                         selfplay=SelfPlayConfig(num_simulations=args.sims, temperature_moves=args.temp_moves, root_mode=args.root_mode, value_mix=args.value_mix),
                          train=TrainConfig(batch_size=args.batch, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay, num_threads=args.workers),
                          gate_games=args.gate_games, gate_threshold=args.gate_threshold, gate_simulations=args.gate_sims,
                          eval_games=args.eval_games, eval_opponents=args.eval_opponents.split(",") if args.eval_opponents else [],
@@ -154,6 +154,7 @@ def main(argv=None):
     s.add_argument("--sims", type=int, default=160, help="MCTS simulations per move in self-play")
     s.add_argument("--temp-moves", type=int, default=20)
     s.add_argument("--root-mode", default="puct", choices=["puct", "gumbel"])
+    s.add_argument("--value-mix", type=float, default=0.0, help="blend the search root value into the value target (0 = pure game outcome)")
     s.add_argument("--bootstrap-games", type=int, default=64)
     s.add_argument("--bootstrap-sims", type=int, default=64)
     s.add_argument("--bootstrap-mode", default="rollout", choices=["rollout", "imitation"])

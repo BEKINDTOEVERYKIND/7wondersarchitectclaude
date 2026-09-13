@@ -41,6 +41,7 @@ class SelfPlayConfig:
     max_plies: int = 2000
     root_mode: str = "puct"            # "puct" (visit-count targets) | "gumbel" (sequential halving, completed-Q targets)
     gumbel_max_considered: int = 16
+    value_mix: float = 0.0             # value target = (1-mix)*game outcome + mix*search root value (lower variance)
 
 
 @dataclass
@@ -78,7 +79,7 @@ def play_selfplay_game(mcts: MCTS, cfg: SelfPlayConfig, seed: int, rng: np.rando
     under one observer must not be reused by the other."""
     t0 = time.time()
     env = Environment(seed=seed, rules=rules)
-    feats, masks, pis, movers = [], [], [], []
+    feats, masks, pis, movers, roots = [], [], [], [], []
     trees = [mcts, mcts_other if mcts_other is not None else MCTS(mcts.evaluator, mcts.cfg, rng=rng, num_actions=mcts.num_actions)]
     for t in trees:
         t.reset()
@@ -98,6 +99,7 @@ def play_selfplay_game(mcts: MCTS, cfg: SelfPlayConfig, seed: int, rng: np.rando
         masks.append(legal_mask(obs))
         pis.append(res.policy_target)
         movers.append(p)
+        roots.append(float(res.root_value))
         env.step(a)
         for t in trees:
             t.advance(a)
@@ -105,6 +107,8 @@ def play_selfplay_game(mcts: MCTS, cfg: SelfPlayConfig, seed: int, rng: np.rando
     r = env.returns()
     s = env.scores()
     z = np.array([r[m] for m in movers], dtype=np.float32)
+    if cfg.value_mix > 0:
+        z = (1.0 - cfg.value_mix) * z + cfg.value_mix * np.clip(np.array(roots, dtype=np.float32), -1.0, 1.0)
     margin = np.array([(s[m] - s[1 - m]) for m in movers], dtype=np.float32)
     return GameRecord(np.stack(feats) if feats else np.zeros((0, FEATURE_SIZE), np.float32),
                       np.stack(masks) if masks else np.zeros((0, Actions.NUM), bool),

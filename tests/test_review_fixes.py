@@ -141,3 +141,18 @@ def test_transcript_tool_produces_full_game():
     text = play_transcript((make_agent("heuristic", seed=0), make_agent("rollout:8:1", seed=1)), seed=5)
     assert text.startswith("# Self-play game") and "## Final position" in text and "**Result:" in text
     assert "search: root value" in text  # the MCTS agent's search statistics are annotated
+
+
+def test_value_mix_blends_root_values():
+    import os, tempfile
+    from dataclasses import asdict
+    from sevenwa.train.pipeline import PipelineConfig, new_network
+    from sevenwa.train.selfplay import SelfPlayConfig, selfplay_worker
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "n.pt")
+        new_network(PipelineConfig(net_width=32, net_depth=1)).save(path)
+        out = os.path.join(d, "g.npz")
+        selfplay_worker({"config": asdict(SelfPlayConfig(num_simulations=8, batch_size=4, value_mix=0.5)),
+                         "checkpoint": path, "seeds": [3], "out_path": out, "generation": 0})
+        z = np.load(out)["z"]
+        assert (np.abs(z) <= 1.0).all() and (np.abs(np.abs(z) - 1.0) > 1e-6).any()

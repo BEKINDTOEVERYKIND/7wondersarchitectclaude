@@ -23,8 +23,8 @@ not change what a player can achieve):
    (Engineering, Economy, Architecture...) already applies to this turn's build; doing science
    first never prevents a build (green cards are not building resources), so this order weakly
    dominates the alternative.  (A token gained mid-turn never fires for a card placed earlier in
-   the same turn, and Olympia's two cards are placed one after the other with a check in between;
-   these are the only ways the fixed order differs from a fully free ordering.)
+   the same turn; this is the only way the fixed order differs from a fully free ordering.
+   Olympia's two cards both land before the mandatory-construction check runs.)
 4. End of turn: battle (if triggered), game end (if a Wonder is complete), next player.
 
 Payments are sequences of "pay one card" decisions (grey resource, coin, or a coin worth 2 with
