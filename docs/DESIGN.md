@@ -117,6 +117,16 @@ score-based games.
   reference (hundreds of playouts per move).
 * `NeuralMCTSAgent` – the trained network + MCTS (the product).
 
+### 2.6 Hybrid evaluation (network + playouts)
+
+`HybridEvaluator` blends the network value with heuristic playouts at every leaf
+(`value = (1-λ)·v_net + λ·playout`).  It exists because the value head is the slowest
+component to become trustworthy: with few thousand self-play games it memorises the replay window
+rather than generalising (see `docs/TRAINING.md`), and a mis-calibrated value head misleads the
+search more than a noisy-but-unbiased playout does.  The hybrid agent is therefore the strongest
+configuration early in a run, and `λ → 0` recovers the pure AlphaZero agent once the fresh-data
+value loss is clearly below 1.
+
 ## 3. Why not something else?
 
 * **Pure minimax/expectimax**: the tree is shallow-ish but chance branching (~15 distinct

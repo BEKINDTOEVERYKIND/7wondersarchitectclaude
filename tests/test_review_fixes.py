@@ -113,3 +113,23 @@ def test_architecture_cannot_fire_twice_through_a_stage_effect_card():
         else:
             s = s.apply_action(s.legal_actions()[0])
     assert offers == 1
+
+
+def test_hybrid_evaluator_blends_values():
+    from sevenwa.agents.factory import make_agent
+    from sevenwa.engine.env import Environment
+    from sevenwa.train.pipeline import PipelineConfig, new_network
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "n.pt")
+        new_network(PipelineConfig(net_width=32, net_depth=1)).save(path)
+        pure = make_agent(f"hybrid:{path}:8:0.0", seed=0)
+        mixed = make_agent(f"hybrid:{path}:8:1.0", seed=0)
+        env = Environment(seed=1)
+        obs = env.observe(0)
+        p0, v0 = pure.mcts.evaluator.evaluate([obs])
+        p1, v1 = mixed.mcts.evaluator.evaluate([obs])
+        assert np.allclose(p0, p1)
+        assert v1[0] in (-1.0, 0.0, 1.0)  # pure playout result
+        a = mixed.select_action(obs)
+        assert a in obs.legal_actions()

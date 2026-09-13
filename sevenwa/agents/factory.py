@@ -7,6 +7,8 @@ Specs
 * ``rollout:<sims>[:<playouts>[:<policy>]]``   – MCTS with playouts; policy ``heuristic`` (default) or ``random``
 * ``net:<checkpoint.pt>[:<sims>]``            – neural MCTS (default 200 simulations)
 * ``netraw:<checkpoint.pt>``                  – the network's policy alone (no search)
+* ``hybrid:<checkpoint.pt>[:<sims>[:<lam>[:<playouts>]]]`` – neural MCTS whose leaf values are blended
+  with heuristic playouts: value = (1-lam)·net + lam·playout (default sims 100, lam 0.5, 1 playout)
 """
 from __future__ import annotations
 
@@ -73,6 +75,22 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
             cfg.num_simulations = sims
         cfg.batch_size = 1  # playout values are computed one leaf at a time
         return MCTSAgent(ev, cfg, name=f"rollout{cfg.num_simulations}x{playouts}-{pol_name}", rng=rng, num_actions=Actions.NUM)
+    if kind == "hybrid":
+        from ..nn.evaluator import TorchEvaluator
+        from ..nn.features import encode
+        from ..nn.model import PolicyValueNet
+        from ..search.rollout import HybridEvaluator
+        path = parts[1]
+        net = PolicyValueNet.load(path)
+        lam = float(parts[3]) if len(parts) > 3 else 0.5
+        playouts = int(parts[4]) if len(parts) > 4 else 1
+        ev = HybridEvaluator(TorchEvaluator(net, encode, num_threads=net_threads), Actions.NUM, lam=lam,
+                             playouts_per_leaf=playouts, rng=rng)
+        cfg = replace(mcts_config) if mcts_config is not None else MCTSConfig(num_simulations=100)
+        if len(parts) > 2:
+            cfg.num_simulations = int(parts[2])
+        cfg.batch_size = 1
+        return MCTSAgent(ev, cfg, name=f"hybrid{cfg.num_simulations}(lam={lam},{path})", rng=rng, num_actions=Actions.NUM)
     if kind in ("net", "netraw"):
         import torch
         from ..nn.evaluator import TorchEvaluator

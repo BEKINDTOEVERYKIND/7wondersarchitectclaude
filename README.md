@@ -26,7 +26,16 @@ sevenwa pipeline --run-dir runs/v1 --generations 20 --games 128 --sims 160 --wor
 # evaluate a checkpoint against baselines
 sevenwa arena --a net:runs/v1/ckpt/champion.pt:200 --b heuristic --games 40
 sevenwa arena --a net:runs/v1/ckpt/champion.pt:200 --b rollout:200:1 --games 40
+# strongest agent while the value network is still young: network priors + playout-blended values
+sevenwa arena --a hybrid:runs/v1/ckpt/champion.pt:200:0.5 --b heuristic --games 40
 ```
+
+## Agent ladder (weakest to strongest as measured during development)
+
+`random` → `netraw:<ckpt>` (policy head alone) → `net:<ckpt>:<sims>` (young network) →
+`heuristic` ≈ `rollout:64:1` → `rollout:200:1` / `hybrid:<ckpt>:<sims>:<lam>`.  The neural agent
+overtakes the classical ones only after enough self-play data; `docs/TRAINING.md` explains the
+measurements and the training regime that avoids replay-window overfitting.
 
 ## Layout
 
