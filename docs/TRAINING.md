@@ -166,6 +166,25 @@ compute matters: the pipeline is doing the right thing, and more games per gener
 (`--games 256+` on a bigger machine) and more generations are what turn the imitation-level
 network into a super-heuristic one.
 
+### Self-play continuation from the imitation network (`runs/v3`, 31 generations)
+
+Continuing self-play from `imitation_v3.pt` (64 games and 96 Gumbel simulations per generation,
+window 30, 0.5 epochs, gate 30 games at 50 %) produced champions that beat the heuristic 14-6 and
+15-5 at 64 simulations, but a 300-simulation head-to-head against the imitation network itself
+came out 9-15: after ~2 000 self-play games the network had **not** improved on its starting
+point.  Two causes are visible in the logs:
+
+* the fresh-generation value loss drifted from 0.7–0.8 back up to ~1.0 as the window filled —
+  the value head over-fits self-play data far faster than it learns from it at this data rate;
+* a 30-game gate at 50 % promotes a coin flip: about half of the "promotions" were noise, so the
+  champion random-walked instead of climbing.
+
+Fixes now available in the pipeline: `--value-mix 0.5` (blend the search root value into the
+value target: lower-variance targets), a stricter gate (`--gate-games 60 --gate-threshold 0.55`),
+and simply more games per generation.  On this 4-core box the reliable strength gains came from
+the imitation bootstrap, so `models/imitation_v3.pt` remains the shipped agent; a larger
+imitation run (`runs/v4`: 40 000 games, 384×5 network) is the next rung.
+
 ### Reproducing
 
 ```
