@@ -75,13 +75,16 @@ python -c "from sevenwa.train.ladder import run_ladder; run_ladder(['random','he
 Arena results are reported as wins-losses-draws with a 95 % Wilson interval; the ladder fits
 Elo (Bradley–Terry) with the first spec as anchor.
 
-## Playing
+## Playing and watching
 
 ```
-sevenwa play --ai net:runs/v1/ckpt/champion.pt:400 --human 0
+sevenwa play --ai net:models/imitation_v3.pt:400 --human 0
+sevenwa transcript --a net:models/imitation_v3.pt:300 --b net:models/imitation_v3.pt:300 --seed 7 --out docs/SAMPLE_GAME.md
 ```
 
-The terminal shows the belief state (both tableaus, deck tops, tokens) and the legal choices.
+`play` shows the belief state (both tableaus, deck tops, tokens) and the legal choices.
+`transcript` writes an annotated markdown game: the table before every turn, each decision with
+its context, and for search agents the root value and per-action visit counts and Q-values.
 
 ## What the development runs taught us (read before training)
 

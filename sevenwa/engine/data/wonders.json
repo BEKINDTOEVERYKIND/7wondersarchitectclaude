@@ -1,48 +1,258 @@
 {
-  "_status": "Totals, effect types and effect counts CONFIRMED (BGG/BGA); per-stage costs, per-stage VP split and which stages carry effects are ASSUMED",
-  "_cost_pattern_note": "Costs follow the pattern reported by reviews: 2 different, 2 identical, 3 different, 3 identical, 4 different. Override per wonder if the physical tray differs.",
+  "_status": "Effect wording per Wonder CONFIRMED (rulebook mirrors); effect counts Rhodes 2 / Babylon 2 / Giza 0 CONFIRMED, Ephesus 3 CONFIRMED (one dissenting review says 2); Olympia 2, Alexandria 2, Halicarnassus 2 and the VP totals 30/26/25/24/22/22/20 SINGLE-SOURCE (BGG thread 2943868); Rhodes effects on stages 2 and 4 SINGLE-SOURCE; per-stage VP split, per-stage cost order and the effect stages of Alexandria/Halicarnassus/Olympia/Ephesus/Babylon ASSUMED",
+  "_cost_pattern_note": "The SET of costs (2-4 cards, identical or different; first stage of most Wonders '2 different', upper stages up to 4) is CONFIRMED by several reviews; the per-Wonder ORDER is ASSUMED to be 2 different, 2 identical, 3 different, 3 identical, 4 different. Marketing copy says Giza 'allows you to build with fewer matching resource cards', so Giza may have fewer 'identical' stages.",
   "wonders": [
-    {"name": "Giza", "total_vp": 30, "stages": [
-      {"cost": 2, "kind": "different", "vp": 4, "effect": "none"},
-      {"cost": 2, "kind": "identical", "vp": 5, "effect": "none"},
-      {"cost": 3, "kind": "different", "vp": 6, "effect": "none"},
-      {"cost": 3, "kind": "identical", "vp": 7, "effect": "none"},
-      {"cost": 4, "kind": "different", "vp": 8, "effect": "none"}]},
-    {"name": "Rhodes", "total_vp": 26, "stages": [
-      {"cost": 2, "kind": "different", "vp": 3, "effect": "none"},
-      {"cost": 2, "kind": "identical", "vp": 4, "effect": "shield"},
-      {"cost": 3, "kind": "different", "vp": 5, "effect": "none"},
-      {"cost": 3, "kind": "identical", "vp": 6, "effect": "shield"},
-      {"cost": 4, "kind": "different", "vp": 8, "effect": "none"}]},
-    {"name": "Alexandria", "total_vp": 25, "stages": [
-      {"cost": 2, "kind": "different", "vp": 3, "effect": "none"},
-      {"cost": 2, "kind": "identical", "vp": 4, "effect": "any_deck_card"},
-      {"cost": 3, "kind": "different", "vp": 5, "effect": "none"},
-      {"cost": 3, "kind": "identical", "vp": 6, "effect": "any_deck_card"},
-      {"cost": 4, "kind": "different", "vp": 7, "effect": "none"}]},
-    {"name": "Halicarnassus", "total_vp": 24, "stages": [
-      {"cost": 2, "kind": "different", "vp": 3, "effect": "none"},
-      {"cost": 2, "kind": "identical", "vp": 4, "effect": "look_5_choose_1"},
-      {"cost": 3, "kind": "different", "vp": 5, "effect": "none"},
-      {"cost": 3, "kind": "identical", "vp": 5, "effect": "look_5_choose_1"},
-      {"cost": 4, "kind": "different", "vp": 7, "effect": "none"}]},
-    {"name": "Olympia", "total_vp": 22, "stages": [
-      {"cost": 2, "kind": "different", "vp": 3, "effect": "none"},
-      {"cost": 2, "kind": "identical", "vp": 3, "effect": "left_and_right_cards"},
-      {"cost": 3, "kind": "different", "vp": 5, "effect": "none"},
-      {"cost": 3, "kind": "identical", "vp": 5, "effect": "left_and_right_cards"},
-      {"cost": 4, "kind": "different", "vp": 6, "effect": "none"}]},
-    {"name": "Ephesus", "total_vp": 22, "stages": [
-      {"cost": 2, "kind": "different", "vp": 2, "effect": "central_card"},
-      {"cost": 2, "kind": "identical", "vp": 4, "effect": "none"},
-      {"cost": 3, "kind": "different", "vp": 4, "effect": "central_card"},
-      {"cost": 3, "kind": "identical", "vp": 6, "effect": "none"},
-      {"cost": 4, "kind": "different", "vp": 6, "effect": "central_card"}]},
-    {"name": "Babylon", "total_vp": 20, "stages": [
-      {"cost": 2, "kind": "different", "vp": 3, "effect": "none"},
-      {"cost": 2, "kind": "identical", "vp": 3, "effect": "progress_token"},
-      {"cost": 3, "kind": "different", "vp": 4, "effect": "none"},
-      {"cost": 3, "kind": "identical", "vp": 4, "effect": "progress_token"},
-      {"cost": 4, "kind": "different", "vp": 6, "effect": "none"}]}
+    {
+      "name": "Giza",
+      "total_vp": 30,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 4,
+          "effect": "none"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 5,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 6,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 7,
+          "effect": "none"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 8,
+          "effect": "none"
+        }
+      ]
+    },
+    {
+      "name": "Rhodes",
+      "total_vp": 26,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 3,
+          "effect": "none"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 4,
+          "effect": "shield"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 5,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 6,
+          "effect": "shield"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 8,
+          "effect": "none"
+        }
+      ]
+    },
+    {
+      "name": "Alexandria",
+      "total_vp": 25,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 3,
+          "effect": "none"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 4,
+          "effect": "any_deck_card"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 5,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 6,
+          "effect": "any_deck_card"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 7,
+          "effect": "none"
+        }
+      ]
+    },
+    {
+      "name": "Halicarnassus",
+      "total_vp": 24,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 3,
+          "effect": "none"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 4,
+          "effect": "look_5_choose_1"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 5,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 5,
+          "effect": "look_5_choose_1"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 7,
+          "effect": "none"
+        }
+      ]
+    },
+    {
+      "name": "Olympia",
+      "total_vp": 22,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 3,
+          "effect": "none"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 3,
+          "effect": "left_and_right_cards"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 5,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 5,
+          "effect": "left_and_right_cards"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 6,
+          "effect": "none"
+        }
+      ]
+    },
+    {
+      "name": "Ephesus",
+      "total_vp": 22,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 2,
+          "effect": "central_card"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 4,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 4,
+          "effect": "central_card"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 6,
+          "effect": "none"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 6,
+          "effect": "central_card"
+        }
+      ]
+    },
+    {
+      "name": "Babylon",
+      "total_vp": 20,
+      "stages": [
+        {
+          "cost": 2,
+          "kind": "different",
+          "vp": 3,
+          "effect": "none"
+        },
+        {
+          "cost": 2,
+          "kind": "identical",
+          "vp": 3,
+          "effect": "progress_token"
+        },
+        {
+          "cost": 3,
+          "kind": "different",
+          "vp": 4,
+          "effect": "none"
+        },
+        {
+          "cost": 3,
+          "kind": "identical",
+          "vp": 4,
+          "effect": "progress_token"
+        },
+        {
+          "cost": 4,
+          "kind": "different",
+          "vp": 6,
+          "effect": "none"
+        }
+      ]
+    }
   ]
 }
