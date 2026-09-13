@@ -133,3 +133,11 @@ def test_hybrid_evaluator_blends_values():
         assert v1[0] in (-1.0, 0.0, 1.0)  # pure playout result
         a = mixed.select_action(obs)
         assert a in obs.legal_actions()
+
+
+def test_transcript_tool_produces_full_game():
+    from sevenwa.agents.factory import make_agent
+    from sevenwa.train.transcript import play_transcript
+    text = play_transcript((make_agent("heuristic", seed=0), make_agent("rollout:8:1", seed=1)), seed=5)
+    assert text.startswith("# Self-play game") and "## Final position" in text and "**Result:" in text
+    assert "search: root value" in text  # the MCTS agent's search statistics are annotated

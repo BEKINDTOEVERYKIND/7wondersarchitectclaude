@@ -105,6 +105,23 @@ def cmd_play(args):
     print("final scores", env.scores(), "returns", env.returns())
 
 
+def cmd_transcript(args):
+    """Play one annotated game between two agents and write a markdown transcript."""
+    from .agents.factory import make_agent
+    from .search.mcts import MCTSConfig
+    from .train.transcript import play_transcript
+    a = make_agent(args.a, seed=args.seed, mcts_config=MCTSConfig(num_simulations=args.sims))
+    b = make_agent(args.b, seed=args.seed + 1, mcts_config=MCTSConfig(num_simulations=args.sims))
+    wonders = tuple(int(x) for x in args.wonders.split(",")) if args.wonders else None
+    text = play_transcript((a, b), seed=args.seed, wonders=wonders)
+    if args.out:
+        with open(args.out, "w") as f:
+            f.write(text + "\n")
+        print(f"wrote {args.out}")
+    else:
+        print(text)
+
+
 def cmd_bench(args):
     from .agents.factory import make_agent
     from .engine.env import Environment
@@ -199,6 +216,15 @@ def main(argv=None):
     s.add_argument("--sims", type=int, default=200)
     s.add_argument("--seed", type=int, default=0)
     s.set_defaults(func=cmd_play)
+
+    s = sub.add_parser("transcript", help="play one annotated game and write a markdown transcript")
+    s.add_argument("--a", default="net:models/imitation_v3.pt:300")
+    s.add_argument("--b", default="net:models/imitation_v3.pt:300")
+    s.add_argument("--sims", type=int, default=300)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--wonders", default=None, help="comma-separated wonder ids for P0,P1 (default random)")
+    s.add_argument("--out", default=None)
+    s.set_defaults(func=cmd_transcript)
 
     s = sub.add_parser("bench", help="time an agent's decisions")
     s.add_argument("--agent", default="rollout:100:1")
