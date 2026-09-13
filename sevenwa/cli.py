@@ -22,6 +22,7 @@ def cmd_pipeline(args):
         return
     cfg = PipelineConfig(run_dir=args.run_dir, generations=args.generations, games_per_generation=args.games,
                          bootstrap_games=args.bootstrap_games, bootstrap_simulations=args.bootstrap_sims,
+                         bootstrap_mode=args.bootstrap_mode, bootstrap_epochs=args.bootstrap_epochs,
                          window_generations=args.window, num_workers=args.workers, seed=args.seed,
                          net_width=args.width, net_depth=args.depth, net_trunk=args.trunk, net_dropout=args.dropout,
                          selfplay=SelfPlayConfig(num_simulations=args.sims, temperature_moves=args.temp_moves, root_mode=args.root_mode),
@@ -138,6 +139,8 @@ def main(argv=None):
     s.add_argument("--root-mode", default="puct", choices=["puct", "gumbel"])
     s.add_argument("--bootstrap-games", type=int, default=64)
     s.add_argument("--bootstrap-sims", type=int, default=64)
+    s.add_argument("--bootstrap-mode", default="rollout", choices=["rollout", "imitation"])
+    s.add_argument("--bootstrap-epochs", type=float, default=4.0)
     s.add_argument("--window", type=int, default=6)
     s.add_argument("--workers", type=int, default=4)
     s.add_argument("--seed", type=int, default=0)

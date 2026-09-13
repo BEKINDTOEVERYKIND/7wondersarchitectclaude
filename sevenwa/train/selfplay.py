@@ -173,3 +173,69 @@ def run_selfplay(cfg: SelfPlayConfig, num_games: int, checkpoint: Optional[str],
     log(f"self-play gen {generation}: {games} games, {samples} samples, {dt:.1f}s ({games / max(dt, 1e-9) * 60:.1f} games/min), "
         f"mean plies {np.mean([r['mean_plies'] for r in results]):.1f}, mean score {np.mean([r['mean_score'] for r in results]):.1f}")
     return results
+
+
+# ---------------------------------------------------------------------------
+# Imitation bootstrap: fast heuristic self-play with soft heuristic policy targets
+# ---------------------------------------------------------------------------
+def imitation_worker(args) -> Dict:
+    """Generate heuristic-vs-heuristic games (ε-greedy for diversity) and record, per decision,
+    the heuristic's soft policy (``heuristic_prior``) as the target plus the game outcome and
+    margin.  ~100 games/s per process, so tens of thousands of games are cheap; the resulting
+    network is a heuristic-level policy with a value head trained on far more outcomes than
+    self-play can produce early on."""
+    from ..agents.heuristic import HeuristicParams, heuristic_action, heuristic_prior
+    from dataclasses import replace as _replace
+    seeds: List[int] = args["seeds"]
+    eps = float(args.get("epsilon", 0.1))
+    temperature = args.get("temperature")
+    out_path = args.get("out_path")
+    generation = int(args.get("generation", 0))
+    rng = np.random.default_rng(args.get("rng_seed", 0))
+    params = _replace(HeuristicParams(), epsilon=eps)
+    feats, masks, pis, zs, margins = [], [], [], [], []
+    t0 = time.time()
+    plies_total = 0
+    for seed in seeds:
+        env = Environment(seed=seed)
+        f_g, m_g, p_g, movers = [], [], [], []
+        while not env.is_terminal():
+            p = env.to_move()
+            obs = env.observe(p)
+            f_g.append(encode_state(obs))
+            m_g.append(legal_mask(obs))
+            p_g.append(heuristic_prior(obs, temperature=temperature) if temperature else heuristic_prior(obs))
+            movers.append(p)
+            env.step(heuristic_action(obs, rng, params))
+        r = env.returns()
+        s = env.scores()
+        feats.extend(f_g); masks.extend(m_g); pis.extend(p_g)
+        zs.extend(r[m] for m in movers)
+        margins.extend(s[m] - s[1 - m] for m in movers)
+        plies_total += len(movers)
+    feats = np.stack(feats).astype(np.float32); masks = np.stack(masks); pis = np.stack(pis).astype(np.float32)
+    z = np.array(zs, np.float32); margin = np.array(margins, np.float32)
+    if out_path:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        np.savez_compressed(out_path, feats=feats, mask=masks, pi=pis, z=z, margin=margin,
+                            gen=np.full(len(z), generation, np.int32))
+    return {"games": len(seeds), "samples": int(len(z)), "out_path": out_path, "seconds": time.time() - t0,
+            "mean_plies": plies_total / max(1, len(seeds))}
+
+
+def run_imitation(num_games: int, out_dir: str, generation: int = 0, num_workers: int = 4, seed: int = 0,
+                  epsilon: float = 0.1, log=print) -> List[Dict]:
+    import multiprocessing as mp
+    seeds = [seed + i for i in range(num_games)]
+    chunks = [seeds[i::num_workers] for i in range(num_workers)]
+    jobs = [{"seeds": c, "epsilon": epsilon, "rng_seed": seed * 1000 + i, "generation": generation,
+             "out_path": os.path.join(out_dir, f"gen{generation:04d}_w{i}.npz")} for i, c in enumerate(chunks) if c]
+    t0 = time.time()
+    if num_workers <= 1 or len(jobs) == 1:
+        results = [imitation_worker(j) for j in jobs]
+    else:
+        with mp.get_context("spawn").Pool(len(jobs)) as pool:
+            results = pool.map(imitation_worker, jobs)
+    games = sum(r["games"] for r in results)
+    log(f"imitation data: {games} heuristic games, {sum(r['samples'] for r in results)} samples, {time.time() - t0:.1f}s")
+    return results

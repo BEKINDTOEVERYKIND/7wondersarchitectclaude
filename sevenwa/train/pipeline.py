@@ -26,7 +26,7 @@ from ..nn.model import NetConfig, PolicyValueNet
 from ..search.mcts import MCTSConfig
 from .arena import play_match
 from .replay import ReplayBuffer
-from .selfplay import SelfPlayConfig, run_selfplay
+from .selfplay import SelfPlayConfig, run_imitation, run_selfplay
 from .trainer import TrainConfig, Trainer
 
 
@@ -35,9 +35,11 @@ class PipelineConfig:
     run_dir: str = "runs/default"
     generations: int = 10
     games_per_generation: int = 64
-    bootstrap_games: int = 64          # rollout-MCTS games before the first network exists (0 to skip)
+    bootstrap_games: int = 64          # games before the first network exists (0 to skip)
+    bootstrap_mode: str = "rollout"    # "rollout": rollout-MCTS games; "imitation": fast ε-greedy heuristic games
     bootstrap_simulations: int = 64
     bootstrap_epochs: float = 4.0
+    bootstrap_epsilon: float = 0.1
     window_generations: int = 6        # replay window
     num_workers: int = 4
     seed: int = 0
@@ -159,10 +161,14 @@ def run_pipeline(cfg: PipelineConfig) -> None:
     else:
         # ---- bootstrap from rollout-MCTS games ------------------------------
         if cfg.bootstrap_games > 0:
-            log(f"bootstrap: {cfg.bootstrap_games} rollout-MCTS games ({cfg.bootstrap_simulations} sims, heuristic playouts)")
-            bcfg = SelfPlayConfig(**{**asdict(cfg.selfplay), "evaluator": "rollout", "num_simulations": cfg.bootstrap_simulations,
-                                     "batch_size": 1})
-            run_selfplay(bcfg, cfg.bootstrap_games, None, data_dir, 0, cfg.num_workers, seed=cfg.seed, log=log)
+            if cfg.bootstrap_mode == "imitation":
+                log(f"bootstrap: {cfg.bootstrap_games} ε-greedy heuristic games (imitation targets)")
+                run_imitation(cfg.bootstrap_games, data_dir, 0, cfg.num_workers, seed=cfg.seed, epsilon=cfg.bootstrap_epsilon, log=log)
+            else:
+                log(f"bootstrap: {cfg.bootstrap_games} rollout-MCTS games ({cfg.bootstrap_simulations} sims, heuristic playouts)")
+                bcfg = SelfPlayConfig(**{**asdict(cfg.selfplay), "evaluator": "rollout", "num_simulations": cfg.bootstrap_simulations,
+                                         "batch_size": 1})
+                run_selfplay(bcfg, cfg.bootstrap_games, None, data_dir, 0, cfg.num_workers, seed=cfg.seed, log=log)
             buffer.load_shards(os.path.join(data_dir, "gen0000_*.npz"))
             log(f"bootstrap buffer: {buffer.stats()}")
             trainer = Trainer(net, TrainConfig(**{**asdict(cfg.train), "epochs": cfg.bootstrap_epochs}))
