@@ -100,6 +100,7 @@ def test_save_load_roundtrip():
         path = os.path.join(d, "n.pt")
         net.save(path, extra={"generation": 3})
         net2 = PolicyValueNet.load(path)
+        net.eval()  # the default network has dropout; compare in inference mode
         x = torch.randn(2, FEATURE_SIZE)
         with torch.no_grad():
             assert torch.allclose(net(x)[0], net2(x)[0])

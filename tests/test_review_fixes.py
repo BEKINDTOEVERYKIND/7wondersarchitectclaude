@@ -85,3 +85,31 @@ def test_factory_respects_caller_simulations():
     assert a.mcts.cfg.num_simulations == 37 and cfg.num_simulations == 37
     b = make_agent("rollout:12", seed=0, mcts_config=cfg)
     assert b.mcts.cfg.num_simulations == 12 and cfg.num_simulations == 37
+
+
+def test_architecture_cannot_fire_twice_through_a_stage_effect_card():
+    """Ephesus: stage 1 (2 different) built with wood+stone -> the stage effect draws a central card;
+    if that card completes stage 2 (2 identical) the second build must NOT queue a second
+    Architecture pick in the same turn (each Progress token once per turn)."""
+    from sevenwa.engine.state import C_DRAW_CENTRAL, D_PICK
+    c = edit(first_pick(W.Ephesus, W.Giza))
+    give_many(c, 0, [K.wood, K.stone, K.clay])
+    from conftest import give_token, T
+    give_token(c, 0, T.Architecture)
+    s = check(c)
+    assert s.dkind == D_PAY  # three greys for "2 different": a real payment choice
+    s = s.apply_action(A.PAY_BASE + 0).apply_action(A.PAY_BASE + 1)  # wood + stone, keep the clay
+    assert s.stages[0] == 1 and s.is_chance() and s.ckind == C_DRAW_CENTRAL, s.describe()  # Ephesus draw
+    s = s.apply_chance(K.clay)  # clay x2 -> stage 2 built at once
+    assert s.stages[0] == 2
+    offers = 0
+    while s.to_move() == 0 and not s.is_terminal():
+        if s.is_chance():
+            s = s.apply_chance(s.chance_outcomes()[0][0])
+            continue
+        if s.dkind == D_PICK and s.dctx[0] == f"token:{T.Architecture}":
+            offers += 1
+            s = s.apply_action(A.PICK_RIGHT)  # accept the extra card
+        else:
+            s = s.apply_action(s.legal_actions()[0])
+    assert offers == 1

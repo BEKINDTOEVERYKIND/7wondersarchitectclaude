@@ -23,9 +23,9 @@ def cmd_pipeline(args):
     cfg = PipelineConfig(run_dir=args.run_dir, generations=args.generations, games_per_generation=args.games,
                          bootstrap_games=args.bootstrap_games, bootstrap_simulations=args.bootstrap_sims,
                          window_generations=args.window, num_workers=args.workers, seed=args.seed,
-                         net_width=args.width, net_depth=args.depth, net_trunk=args.trunk,
+                         net_width=args.width, net_depth=args.depth, net_trunk=args.trunk, net_dropout=args.dropout,
                          selfplay=SelfPlayConfig(num_simulations=args.sims, temperature_moves=args.temp_moves, root_mode=args.root_mode),
-                         train=TrainConfig(batch_size=args.batch, epochs=args.epochs, lr=args.lr, num_threads=args.workers),
+                         train=TrainConfig(batch_size=args.batch, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay, num_threads=args.workers),
                          gate_games=args.gate_games, gate_threshold=args.gate_threshold, gate_simulations=args.gate_sims,
                          eval_games=args.eval_games, eval_opponents=args.eval_opponents.split(",") if args.eval_opponents else [],
                          eval_simulations=args.eval_sims, eval_every=args.eval_every)
@@ -144,9 +144,11 @@ def main(argv=None):
     s.add_argument("--width", type=int, default=256)
     s.add_argument("--depth", type=int, default=4)
     s.add_argument("--trunk", default="resmlp", choices=["resmlp", "attention"])
+    s.add_argument("--dropout", type=float, default=0.1)
     s.add_argument("--batch", type=int, default=256)
     s.add_argument("--epochs", type=float, default=1.0)
     s.add_argument("--lr", type=float, default=1e-3)
+    s.add_argument("--weight-decay", type=float, default=1e-3)
     s.add_argument("--gate-games", type=int, default=40)
     s.add_argument("--gate-threshold", type=float, default=0.55)
     s.add_argument("--gate-sims", type=int, default=100)

@@ -83,6 +83,39 @@ sevenwa play --ai net:runs/v1/ckpt/champion.pt:400 --human 0
 
 The terminal shows the belief state (both tableaus, deck tops, tokens) and the legal choices.
 
-## Results of the reference run
+## What the development runs taught us (read before training)
 
-_(filled in below from the development run on this 4-core, CPU-only machine)_
+The first reference run (`runs/v1`, 34 generations × 64 games, window 6, 1.5 epochs) exposed the
+dominant failure mode of this game on a small compute budget: **replay-window overfitting**.
+Self-play samples are ~60 per game and highly correlated, so a 6-generation window holds only
+~380 games.  Diagnostics (all reproducible with the scripts in `docs/TRAINING.md` § below):
+
+| Measurement | Value |
+|---|---|
+| Champion value MSE on its own training window | 0.04–0.2 |
+| Champion value MSE on the *next*, unseen generation | 1.3–1.8 (worse than predicting 0) |
+| Fresh network, all 2000 games, held-out generation: value MSE after 1 / 3 / 9 epochs | 0.92 / 1.15 / 1.42 |
+| Held-out policy cross-entropy, any setting | ≈ 1.08 (≈ 3 legal actions) |
+| `sign(score difference)` predicts the winner at turns 30+ / at turns 0–15 | 82 % / 34 % |
+
+The last line shows that early positions are genuinely unpredictable (an early points lead is
+even *negatively* correlated with winning, tempo matters more), so a value MSE near 0.8–0.9 is
+the realistic floor with few games, and anything beyond one pass over fresh data is memorisation.
+The pipeline therefore logs `champion loss on the fresh generation` every generation — watch it:
+if the value term climbs above ~1.0 the network is overfitting and the search is being misled.
+
+Recommended regime (what `runs/v2` uses):
+
+```
+sevenwa pipeline --run-dir runs/v2 --games 64 --sims 96 --root-mode gumbel \
+    --window 30 --epochs 0.5 --lr 5e-4 --weight-decay 1e-3 --dropout 0.2 \
+    --gate-games 30 --gate-threshold 0.5 --eval-opponents heuristic --eval-every 3
+```
+
+i.e. a window of ~2000 games, half a pass per generation (every sample is seen ~15 times over
+its life in the window, spread over 30 different champions), dropout + weight decay, and a soft
+gate.  With more cores, raise `--games` first (data diversity), then `--sims`.
+
+## Results of the reference runs
+
+_(see below)_

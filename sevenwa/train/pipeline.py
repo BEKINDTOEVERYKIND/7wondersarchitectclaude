@@ -44,6 +44,7 @@ class PipelineConfig:
     net_width: int = 256
     net_depth: int = 4
     net_trunk: str = "resmlp"
+    net_dropout: float = 0.1
     selfplay: SelfPlayConfig = field(default_factory=SelfPlayConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     gate_games: int = 40
@@ -95,8 +96,23 @@ def _log_factory(run_dir: str):
 
 def new_network(cfg: PipelineConfig) -> PolicyValueNet:
     ncfg = NetConfig(input_dim=FEATURE_SIZE, num_actions=Actions.NUM, trunk=cfg.net_trunk, width=cfg.net_width,
-                     depth=cfg.net_depth, entity_slices=list(ENTITY_SLICES))
+                     depth=cfg.net_depth, dropout=cfg.net_dropout, entity_slices=list(ENTITY_SLICES))
     return PolicyValueNet(ncfg)
+
+
+def fresh_data_loss(net: PolicyValueNet, shard_glob: str) -> Dict[str, float]:
+    """Loss of ``net`` on data it has never trained on (the newest generation's shards) — the
+    generalisation diagnostic that exposes replay-window overfitting."""
+    from ..nn.model import compute_loss
+    buf = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+    if buf.load_shards(shard_glob) == 0:
+        return {}
+    b = buf.sample(min(len(buf), 8192), np.random.default_rng(0))
+    net.eval()
+    with torch.no_grad():
+        _, parts = compute_loss(net, torch.from_numpy(b.feats), torch.from_numpy(b.mask), torch.from_numpy(b.pi),
+                                torch.from_numpy(b.z), torch.from_numpy(b.margin))
+    return {k: float(v) for k, v in parts.items()}
 
 
 def evaluate_agents(spec_a: str, spec_b: str, games: int, seed: int, log, mcts_sims: int = 100) -> Dict:
@@ -167,6 +183,10 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         log(f"replay buffer: {buffer.stats()}")
 
         candidate = PolicyValueNet.load(champion_path)
+        fresh = fresh_data_loss(candidate, os.path.join(data_dir, f"gen{gen:04d}_*.npz"))
+        if fresh:
+            log(f"champion loss on the fresh generation (unseen data): policy {fresh['policy']:.3f} value {fresh['value']:.3f} "
+                f"score {fresh['score']:.3f} acc {fresh['acc']:.3f}")
         trainer = Trainer(candidate, cfg.train)
         train_stats = trainer.train(buffer, rng, log=log)
         cand_path = os.path.join(ckpt_dir, f"gen{gen:04d}.pt")
@@ -188,6 +208,6 @@ def run_pipeline(cfg: PipelineConfig) -> None:
             for opp in cfg.eval_opponents:
                 evals.append(evaluate_agents(f"net:{champion_path}:{cfg.eval_simulations}", opp, cfg.eval_games,
                                              seed=cfg.seed + gen * 104_729, log=log, mcts_sims=cfg.eval_simulations))
-        record({"generation": gen, "train": train_stats, "gate": gate, "promoted": promoted, "evals": evals,
-                "buffer": buffer.stats(), "seconds": time.time() - t_gen})
+        record({"generation": gen, "train": train_stats, "fresh": fresh, "gate": gate, "promoted": promoted,
+                "evals": evals, "buffer": buffer.stats(), "seconds": time.time() - t_gen})
         log(f"generation {gen} done in {time.time() - t_gen:.0f}s")
