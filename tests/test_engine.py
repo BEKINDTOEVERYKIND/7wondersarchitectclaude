@@ -658,7 +658,7 @@ class TestConstruction:
 
     def test_economy_is_once_per_turn_not_once_per_build(self, base):
         """Two builds in one turn: the doubled coin is available only once (rulebook: each token once
-        per turn).  Note ``RulesConfig.economy_once_per_build`` is not consulted by the engine."""
+        per turn) under the default ``RulesConfig.economy_once_per_build = False``."""
         s = check(giza_with(base, 0, [K.coin, K.coin], [T.Economy]))
         assert s.dkind == D_PAY and set(s.legal_actions()) == {A.PAY_COIN, A.PAY_COIN2}
         s = s.apply_action(A.PAY_COIN2)
