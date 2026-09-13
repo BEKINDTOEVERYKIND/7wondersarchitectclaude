@@ -111,9 +111,10 @@ class Environment:
         o._legal = s._legal
         o._outcomes = s._outcomes
         if s.deck_top[CENTRAL] >= 0 and not s.knows_central(player):
+            # hide the card but keep the public fact that the other player has peeked at it
             o.unseen[CENTRAL][o.deck_top[CENTRAL]] += 1
             o.deck_top[CENTRAL] = -1
-            o.central_known_to = 0
+            o.central_known_to = s.central_known_to & ~(1 << player)
         return o
 
     def step(self, action: int) -> None:

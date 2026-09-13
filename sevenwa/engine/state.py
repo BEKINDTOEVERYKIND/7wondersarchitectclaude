@@ -306,8 +306,13 @@ class GameState:
         return [self.cards[p][KIND_OF_SYMBOL[s]] for s in range(len(SYMBOLS))]
 
     def knows_central(self, p: int) -> bool:
-        """Does player ``p`` know the identity of the central deck's top card?"""
+        """Does player ``p`` know the identity of the central deck's top card (in this belief state)?"""
         return p >= 0 and self.deck_top[CENTRAL] >= 0 and bool((self.central_known_to >> p) & 1)
+
+    def has_peeked(self, p: int) -> bool:
+        """Public fact: player ``p`` has looked at the current central top card (even if this belief
+        state does not know which card it is)."""
+        return p >= 0 and bool((self.central_known_to >> p) & 1)
 
     def has_token(self, p: int, tid: int) -> bool:
         return self.tokens[p][tid] > 0
@@ -397,6 +402,7 @@ class GameState:
                     # already known to the other player (who must be the observer): the peek reveals that card
                     self.central_known_to |= 1 << m
                     return False
+                self.central_known_to &= ~(1 << m)  # (re)peek: the sampled card becomes known to the mover
                 return self._set_chance(C_PEEK, None, self.unseen[CENTRAL])
             return False
         if op == "pick":
@@ -500,7 +506,8 @@ class GameState:
                 if self.conflict >= self.rules.conflict_tokens:
                     self.battle_pending = True
         # everything below is pushed to the FRONT, so push in reverse order of execution
-        self._push(("check",))
+        if reason != "olympia_nocheck":  # Olympia: the check runs once both cards have landed
+            self._push(("check",))
         trig: List[int] = []
         if kind.type == GREY:
             for t in _RESOURCE_TOKS:
@@ -659,7 +666,12 @@ class GameState:
         elif eff == E_CENTRAL:
             self._push(("pick", "ephesus", opt, (CENTRAL,)))
         elif eff == E_LEFT_RIGHT:
-            self._push(("take", m, "olympia"), ("take", 1 - m, "olympia"))
+            # both cards land before the mandatory-construction check ("take the top card of the decks
+            # to your left AND right"), so the player may pay with either card
+            decks = [d for d in (m, 1 - m) if self.deck_size[d] > 0]
+            items = [("take", d, "olympia_nocheck" if i < len(decks) - 1 else "olympia") for i, d in enumerate(decks)]
+            if items:
+                self._push(*items)
         elif eff == E_LOOK5:
             self._push(("hali_deck",))
 
@@ -791,7 +803,7 @@ class GameState:
         elif kind == C_PEEK:
             self.unseen[CENTRAL][outcome] -= 1
             self.deck_top[CENTRAL] = outcome
-            self.central_known_to = 1 << self.mover
+            self.central_known_to |= 1 << self.mover
         elif kind == C_TOKEN_REVEAL:
             self.prog_unseen[outcome] -= 1
             self.prog_stack -= 1

@@ -11,32 +11,55 @@ def expected(ra: float, rb: float) -> float:
 
 
 def fit_elo(results: Iterable[Tuple[str, str, float]], anchor: str = "random", anchor_rating: float = 0.0,
-            iterations: int = 500) -> Dict[str, float]:
+            iterations: int = 2000, tol: float = 1e-9) -> Dict[str, float]:
     """``results`` are ``(name_a, name_b, score_a)`` with score in {0, 0.5, 1}.
 
-    Ratings are fitted by minimising the logistic log-loss with a fixed anchor.
+    Bradley–Terry maximum likelihood via Hunter's minorisation–maximisation iteration
+    (γ_i ← W_i / Σ_j n_ij / (γ_i + γ_j)), which converges monotonically; draws count as half a
+    win for each side.  Ratings are 400·log10(γ), shifted so that ``anchor`` has ``anchor_rating``.
+    A tiny prior pseudo-game against every opponent keeps γ finite for undefeated players.
     """
-    games = defaultdict(lambda: [0.0, 0.0])  # (a,b) -> [score_a_sum, count]
+    wins = defaultdict(float)  # name -> (fractional) wins
+    games = defaultdict(float)  # (a,b) with a<b -> games played
     names = set()
-    for a, b, s in results:
+    for a, b, sc in results:
         names.add(a); names.add(b)
-        games[(a, b)][0] += s; games[(a, b)][1] += 1
-    rating = {n: 0.0 for n in names}
-    if anchor in rating:
-        rating[anchor] = anchor_rating
-    lr = 20.0
+        wins[a] += sc
+        wins[b] += 1.0 - sc
+        key = (a, b) if a <= b else (b, a)
+        games[key] += 1.0
+    names = sorted(names)
+    if not names:
+        return {}
+    eps = 0.01  # prior: 0.01 of a drawn game against every opponent
+    for a in names:
+        for b in names:
+            if a < b:
+                games[(a, b)] += 2 * eps
+                wins[a] += eps
+                wins[b] += eps
+    gamma = {n: 1.0 for n in names}
     for _ in range(iterations):
-        grad = defaultdict(float)
-        for (a, b), (sa, n) in games.items():
-            e = expected(rating[a], rating[b]) * n
-            grad[a] += sa - e
-            grad[b] -= sa - e
-        for nme in rating:
-            if nme == anchor:
-                continue
-            rating[nme] += lr * grad[nme] / max(1.0, sum(c for (x, y), (_, c) in games.items() if nme in (x, y)))
-        lr = max(1.0, lr * 0.995)
-    return rating
+        new = {}
+        for i in names:
+            denom = 0.0
+            for j in names:
+                if i == j:
+                    continue
+                key = (i, j) if i <= j else (j, i)
+                n_ij = games.get(key, 0.0)
+                if n_ij:
+                    denom += n_ij / (gamma[i] + gamma[j])
+            new[i] = wins[i] / denom if denom > 0 else gamma[i]
+        norm = sum(new.values()) / len(new)
+        new = {k: v / norm for k, v in new.items()}
+        delta = max(abs(math.log(new[k]) - math.log(gamma[k])) for k in names)
+        gamma = new
+        if delta < tol:
+            break
+    rating = {n: 400.0 * math.log10(gamma[n]) for n in names}
+    shift = anchor_rating - rating.get(anchor, 0.0)
+    return {n: r + shift for n, r in rating.items()}
 
 
 def wilson_interval(wins: float, n: int, z: float = 1.96) -> Tuple[float, float]:

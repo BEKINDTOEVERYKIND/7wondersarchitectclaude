@@ -46,23 +46,35 @@ def gumbel_search(mcts: MCTS, state, num_simulations: int, max_considered: int =
             return None
         return sign * child.W / child.N
 
+    # Sequential Halving schedule as in the paper / mctx: each phase gives every remaining action
+    # floor(n / (log2(K) * |remaining|)) visits (using the TOTAL budget n), halves the set (never below
+    # 2 actions) and keeps cycling until the budget is exhausted, so the last visits always compare
+    # the two best candidates.
     budget = num_simulations
     phases = max(1, int(math.ceil(math.log2(max(2, K)))))
-    while len(remaining) > 1 and budget > 0:
-        per = max(1, budget // (len(remaining) * phases))
-        for idx in remaining:
-            _simulate_forced(mcts, root, actions[idx], per)
-        budget -= per * len(remaining)
-        max_n = max((root.children[actions[i]].N for i in remaining if actions[i] in root.children), default=0)
-        scores = []
-        for idx in remaining:
-            q = q_of(idx)
-            scores.append(g[idx] + logits[idx] + (_sigma(np.array([q]), max_n, c_visit, c_scale)[0] if q is not None else 0.0))
-        keep = max(1, len(remaining) // 2)
-        remaining = [remaining[i] for i in np.argsort(-np.array(scores))[:keep]]
-    if budget > 0 and remaining:
+
+    def score(idx: int, max_n: int) -> float:
+        q = q_of(idx)
+        return g[idx] + logits[idx] + (_sigma(np.array([q]), max_n, c_visit, c_scale)[0] if q is not None else 0.0)
+
+    if len(remaining) == 1 and budget > 0:
         _simulate_forced(mcts, root, actions[remaining[0]], budget)
-    chosen = actions[remaining[0]]
+        budget = 0
+    while budget > 0:
+        per = max(1, num_simulations // (phases * len(remaining)))
+        per = min(per, max(1, -(-budget // len(remaining))))
+        for idx in remaining:
+            n = min(per, budget)
+            if n <= 0:
+                break
+            _simulate_forced(mcts, root, actions[idx], n)
+            budget -= n
+        max_n = max((root.children[actions[i]].N for i in remaining if actions[i] in root.children), default=0)
+        order = np.argsort(-np.array([score(i, max_n) for i in remaining]))
+        keep = max(2, len(remaining) // 2) if len(remaining) > 2 else len(remaining)
+        remaining = [remaining[i] for i in order[:keep]]
+    max_n = max((root.children[actions[i]].N for i in remaining if actions[i] in root.children), default=0)
+    chosen = actions[max(remaining, key=lambda i: score(i, max_n))]
 
     # completed Q-values and the improved policy over all legal actions
     max_n = max((c.N for c in root.children.values()), default=0)
@@ -106,8 +118,7 @@ def _simulate_forced(mcts: MCTS, root: Node, action: int, n: int) -> None:
             if child is None:
                 child = Node(root.state.apply_action(action))
                 root.children[action] = child
-            leaf, path = mcts._select(child)
-            path = [(root, 1 if root.to_move == 0 else -1)] + path
+            leaf, path = mcts._select(root, start=child, prefix=[(root, mcts._sign_of(root))])
             if leaf.is_terminal:
                 mcts._backup(path, leaf.terminal_value, remove_virtual=False)
                 done += 1

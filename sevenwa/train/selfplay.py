@@ -72,15 +72,21 @@ def _make_evaluator(cfg: SelfPlayConfig, checkpoint: Optional[str], rng: np.rand
 
 
 def play_selfplay_game(mcts: MCTS, cfg: SelfPlayConfig, seed: int, rng: np.random.Generator,
-                       rules: Optional[RulesConfig] = None) -> GameRecord:
+                       rules: Optional[RulesConfig] = None, mcts_other: Optional[MCTS] = None) -> GameRecord:
+    """Play one self-play game.  Each seat searches with its own tree (``mcts`` for player 0 and
+    ``mcts_other`` for player 1) because the two belief states differ (Cat peek), so a subtree built
+    under one observer must not be reused by the other."""
     t0 = time.time()
     env = Environment(seed=seed, rules=rules)
     feats, masks, pis, movers = [], [], [], []
-    mcts.reset()
+    trees = [mcts, mcts_other if mcts_other is not None else MCTS(mcts.evaluator, mcts.cfg, rng=rng, num_actions=mcts.num_actions)]
+    for t in trees:
+        t.reset()
     plies = 0
     while not env.is_terminal() and plies < cfg.max_plies:
         p = env.to_move()
         obs = env.observe(p)
+        mcts = trees[p]
         if cfg.root_mode == "gumbel":
             res = gumbel_search(mcts, obs, cfg.num_simulations, max_considered=cfg.gumbel_max_considered)
             a = int(res.extra["chosen"]) if plies < cfg.temperature_moves else int(np.argmax(res.improved_policy))
@@ -93,7 +99,8 @@ def play_selfplay_game(mcts: MCTS, cfg: SelfPlayConfig, seed: int, rng: np.rando
         pis.append(res.policy_target)
         movers.append(p)
         env.step(a)
-        mcts.advance(a)
+        for t in trees:
+            t.advance(a)
         plies += 1
     r = env.returns()
     s = env.scores()
@@ -120,7 +127,8 @@ def selfplay_worker(args) -> Dict:
     if cfg.evaluator != "net":
         mcfg.batch_size = 1
     mcts = MCTS(evaluator, mcfg, rng=rng, num_actions=Actions.NUM)
-    records = [play_selfplay_game(mcts, cfg, seed, rng) for seed in seeds]
+    mcts_other = MCTS(evaluator, mcfg, rng=rng, num_actions=Actions.NUM)
+    records = [play_selfplay_game(mcts, cfg, seed, rng, mcts_other=mcts_other) for seed in seeds]
     feats = np.concatenate([r.feats for r in records]) if records else np.zeros((0, FEATURE_SIZE), np.float32)
     mask = np.concatenate([r.mask for r in records])
     pi = np.concatenate([r.pi for r in records])

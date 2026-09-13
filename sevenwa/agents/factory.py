@@ -10,6 +10,7 @@ Specs
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Optional
 
 import numpy as np
@@ -56,7 +57,7 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
         eps = float(parts[1]) if len(parts) > 1 else 0.0
         return HeuristicAgent(rng=rng, epsilon=eps)
     if kind == "rollout":
-        sims = int(parts[1]) if len(parts) > 1 else 200
+        sims = int(parts[1]) if len(parts) > 1 else None
         playouts = int(parts[2]) if len(parts) > 2 else 1
         pol_name = parts[3] if len(parts) > 3 else "heuristic"
         if pol_name == "heuristic":
@@ -67,9 +68,11 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
             policy_fn = random_policy
             prior_fn = None
         ev = RolloutEvaluator(Actions.NUM, playouts_per_leaf=playouts, policy_fn=policy_fn, rng=rng, prior_fn=prior_fn)
-        cfg = mcts_config or MCTSConfig(num_simulations=sims, batch_size=1)
-        cfg.num_simulations = sims
-        return MCTSAgent(ev, cfg, name=f"rollout{sims}x{playouts}-{pol_name}", rng=rng, num_actions=Actions.NUM)
+        cfg = replace(mcts_config) if mcts_config is not None else MCTSConfig(num_simulations=200)
+        if sims is not None:  # an explicit count in the spec wins over the caller's config
+            cfg.num_simulations = sims
+        cfg.batch_size = 1  # playout values are computed one leaf at a time
+        return MCTSAgent(ev, cfg, name=f"rollout{cfg.num_simulations}x{playouts}-{pol_name}", rng=rng, num_actions=Actions.NUM)
     if kind in ("net", "netraw"):
         import torch
         from ..nn.evaluator import TorchEvaluator
@@ -80,8 +83,8 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
         ev = TorchEvaluator(net, encode, num_threads=net_threads)
         if kind == "netraw":
             return RawNetAgent(ev, name=f"netraw({path})", rng=rng)
-        sims = int(parts[2]) if len(parts) > 2 else 200
-        cfg = mcts_config or MCTSConfig(num_simulations=sims)
-        cfg.num_simulations = sims
-        return MCTSAgent(ev, cfg, name=f"net{sims}({path})", rng=rng, num_actions=Actions.NUM)
+        cfg = replace(mcts_config) if mcts_config is not None else MCTSConfig(num_simulations=200)
+        if len(parts) > 2:
+            cfg.num_simulations = int(parts[2])
+        return MCTSAgent(ev, cfg, name=f"net{cfg.num_simulations}({path})", rng=rng, num_actions=Actions.NUM)
     raise ValueError(f"unknown agent spec: {spec}")

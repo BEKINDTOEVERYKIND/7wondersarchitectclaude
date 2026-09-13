@@ -21,6 +21,7 @@ class MatchResult:
     score_diffs: List[int] = field(default_factory=list)
     plies: List[int] = field(default_factory=list)
     per_game: List[Tuple[int, int, int, int]] = field(default_factory=list)  # (seed, first_player_agent, s0, s1)
+    outcomes: List[float] = field(default_factory=list)  # 1 / 0.5 / 0 for agent 0, using the game's returns (tie-break included)
 
     def score(self, agent_idx: int) -> float:
         return (self.wins[agent_idx] + 0.5 * self.draws) / max(1, self.games)
@@ -71,6 +72,7 @@ def play_match(env_factory: EnvFactory, agents: Tuple[Agent, Agent], num_games: 
         res.score_diffs.append(int(s_agent[0] - s_agent[1]))
         res.plies.append(plies)
         res.per_game.append((seed + g, first, int(s_agent[0]), int(s_agent[1])))
+        res.outcomes.append(1.0 if r_agent[0] > r_agent[1] else (0.0 if r_agent[1] > r_agent[0] else 0.5))
         if log is not None and ((g + 1) % 10 == 0 or g + 1 == num_games):
             log(f"  game {g + 1}/{num_games}: {res.wins[0]:.0f}-{res.wins[1]:.0f}-{res.draws}")
     return res

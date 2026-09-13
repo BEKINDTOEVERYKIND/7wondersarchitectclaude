@@ -48,7 +48,7 @@ class TestRandomGames:
                 if s.knows_central(p):
                     assert o.deck_top[CENTRAL] == s.deck_top[CENTRAL] and o.knows_central(p)
                 else:
-                    assert o.deck_top[CENTRAL] == -1 and o.central_known_to == 0
+                    assert o.deck_top[CENTRAL] == -1 and not o.knows_central(p) and o.has_peeked(1 - p) == s.has_peeked(1 - p)
                     assert sum(o.unseen[CENTRAL]) == o.deck_size[CENTRAL]
                     if s.deck_top[CENTRAL] >= 0:
                         stats["hidden_obs"] += 1
@@ -136,7 +136,7 @@ class TestHiddenInformation:
         top = s.deck_top[CENTRAL]
         holder, other = env.observe(0), env.observe(1)
         assert holder.deck_top[CENTRAL] == top and holder.knows_central(0) and holder.observer == 0
-        assert other.deck_top[CENTRAL] == -1 and other.central_known_to == 0 and other.observer == 1
+        assert other.deck_top[CENTRAL] == -1 and not other.knows_central(1) and other.has_peeked(0) and other.observer == 1
         assert other.unseen[CENTRAL][top] == s.unseen[CENTRAL][top] + 1
         assert other.deck_size[CENTRAL] == s.deck_size[CENTRAL]
         assert other.key() != holder.key()

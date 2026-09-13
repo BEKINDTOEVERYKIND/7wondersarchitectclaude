@@ -11,9 +11,15 @@ import numpy as np
 
 
 def cmd_pipeline(args):
-    from .train.pipeline import PipelineConfig, run_pipeline
+    from .train.pipeline import PipelineConfig, apply_overrides, config_from_dict, run_pipeline
     from .train.selfplay import SelfPlayConfig
     from .train.trainer import TrainConfig
+    if args.config:
+        with open(args.config) as f:
+            cfg = config_from_dict(json.load(f))
+        cfg.run_dir = args.run_dir if args.run_dir != "runs/default" else cfg.run_dir
+        run_pipeline(apply_overrides(cfg, args.set))
+        return
     cfg = PipelineConfig(run_dir=args.run_dir, generations=args.generations, games_per_generation=args.games,
                          bootstrap_games=args.bootstrap_games, bootstrap_simulations=args.bootstrap_sims,
                          window_generations=args.window, num_workers=args.workers, seed=args.seed,
@@ -23,7 +29,7 @@ def cmd_pipeline(args):
                          gate_games=args.gate_games, gate_threshold=args.gate_threshold, gate_simulations=args.gate_sims,
                          eval_games=args.eval_games, eval_opponents=args.eval_opponents.split(",") if args.eval_opponents else [],
                          eval_simulations=args.eval_sims, eval_every=args.eval_every)
-    run_pipeline(cfg)
+    run_pipeline(apply_overrides(cfg, args.set))
 
 
 def cmd_arena(args):
@@ -121,6 +127,9 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("pipeline", help="run the full self-play training pipeline")
+    s.add_argument("--config", default=None, help="JSON file with PipelineConfig fields (nested 'selfplay'/'train')")
+    s.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="override any config field, e.g. --set selfplay.c_puct=2.0 --set train.score_weight=0.5")
     s.add_argument("--run-dir", default="runs/default")
     s.add_argument("--generations", type=int, default=10)
     s.add_argument("--games", type=int, default=64, help="self-play games per generation")

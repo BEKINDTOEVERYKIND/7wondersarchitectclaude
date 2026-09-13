@@ -368,8 +368,9 @@ def assert_deck_sizes(s: GameState) -> None:
         expect = sum(s.unseen[d]) + (1 if s.deck_top[d] >= 0 else 0) + (len(rev) if d == rev_d else 0)
         assert s.deck_size[d] == expect, f"deck {d}: size {s.deck_size[d]} != {expect}\n{s.describe()}"
         assert all(c >= 0 for c in s.unseen[d])
-    # the central top is only ever known through a Cat peek (``central_known_to`` is a bitmask)
-    assert (s.deck_top[CENTRAL] >= 0) == (s.central_known_to != 0)
+    # the central top is only ever known through a Cat peek (``central_known_to`` is a bitmask); an
+    # observation may keep the public "has peeked" bit of the other player while hiding the card
+    assert s.deck_top[CENTRAL] < 0 or s.central_known_to != 0
     assert 0 <= s.central_known_to <= 3
     for d in (0, 1):  # wonder decks are face up: the top is visible unless a reveal is pending
         if s.deck_size[d] > 0 and s.deck_top[d] < 0:

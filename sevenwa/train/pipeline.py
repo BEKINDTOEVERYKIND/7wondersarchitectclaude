@@ -55,6 +55,32 @@ class PipelineConfig:
     eval_every: int = 1
 
 
+def config_from_dict(d: Dict) -> PipelineConfig:
+    """Build a PipelineConfig from a (possibly partial, nested) dict such as a parsed JSON file."""
+    d = dict(d)
+    sp = SelfPlayConfig(**d.pop("selfplay", {}))
+    tr = TrainConfig(**d.pop("train", {}))
+    return PipelineConfig(selfplay=sp, train=tr, **d)
+
+
+def apply_overrides(cfg: PipelineConfig, overrides: List[str]) -> PipelineConfig:
+    """Apply ``section.field=value`` / ``field=value`` overrides (values parsed as JSON when possible)."""
+    for ov in overrides:
+        key, _, raw = ov.partition("=")
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            value = raw
+        target = cfg
+        parts = key.split(".")
+        for p in parts[:-1]:
+            target = getattr(target, p)
+        if not hasattr(target, parts[-1]):
+            raise KeyError(f"unknown config field {key}")
+        setattr(target, parts[-1], value)
+    return cfg
+
+
 def _log_factory(run_dir: str):
     os.makedirs(run_dir, exist_ok=True)
     fh = open(os.path.join(run_dir, "log.txt"), "a")
@@ -74,12 +100,14 @@ def new_network(cfg: PipelineConfig) -> PolicyValueNet:
 
 
 def evaluate_agents(spec_a: str, spec_b: str, games: int, seed: int, log, mcts_sims: int = 100) -> Dict:
+    if games <= 0:
+        return {"a": spec_a, "b": spec_b, "score_a": 0.5, "wins": [0.0, 0.0], "draws": 0, "mean_margin": 0.0, "games": 0}
     agent_a = make_agent(spec_a, seed=seed, mcts_config=MCTSConfig(num_simulations=mcts_sims))
     agent_b = make_agent(spec_b, seed=seed + 1, mcts_config=MCTSConfig(num_simulations=mcts_sims))
     res = play_match(make_env, (agent_a, agent_b), games, seed=seed)
     log("  " + res.summary((agent_a.name, agent_b.name)))
     return {"a": spec_a, "b": spec_b, "score_a": res.score(0), "wins": res.wins, "draws": res.draws,
-            "mean_margin": float(np.mean(res.score_diffs)), "games": games}
+            "mean_margin": float(np.mean(res.score_diffs)) if res.score_diffs else 0.0, "games": games}
 
 
 def run_pipeline(cfg: PipelineConfig) -> None:
@@ -144,10 +172,10 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         cand_path = os.path.join(ckpt_dir, f"gen{gen:04d}.pt")
         candidate.save(cand_path, extra={"generation": gen})
 
-        # ---- gate ---------------------------------------------------------
+        # ---- gate (gate_games <= 0 disables gating: always promote) ---------
         gate = evaluate_agents(f"net:{cand_path}:{cfg.gate_simulations}", f"net:{champion_path}:{cfg.gate_simulations}",
                                cfg.gate_games, seed=cfg.seed + gen * 7919, log=log, mcts_sims=cfg.gate_simulations)
-        promoted = gate["score_a"] >= cfg.gate_threshold
+        promoted = cfg.gate_games <= 0 or gate["score_a"] >= cfg.gate_threshold
         if promoted:
             shutil.copyfile(cand_path, champion_path)
             log(f"candidate PROMOTED ({gate['score_a'] * 100:.1f}% >= {cfg.gate_threshold * 100:.0f}%)")

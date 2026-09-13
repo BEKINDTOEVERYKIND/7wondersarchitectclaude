@@ -225,10 +225,16 @@ class MCTS:
             return cfg.c_puct_init + math.log((parent_n + cfg.c_puct_base + 1) / cfg.c_puct_base)
         return cfg.c_puct
 
-    def _select(self, root: Node) -> Tuple[Node, List[Tuple[Node, int]]]:
-        """Descend from the root to a leaf; returns the leaf and the path of (node, sign)."""
-        node = root
-        path: List[Tuple[Node, int]] = [(root, 1 if root.to_move == 0 else -1)]
+    @staticmethod
+    def _sign_of(node: Node) -> int:
+        return 0 if node.is_chance else (1 if node.to_move == 0 else -1)
+
+    def _select(self, root: Node, start: Optional[Node] = None,
+                prefix: Optional[List[Tuple[Node, int]]] = None) -> Tuple[Node, List[Tuple[Node, int]]]:
+        """Descend from ``root`` (or from ``start`` below it, with ``prefix`` already on the path) to a
+        leaf; returns the leaf and the path of (node, sign)."""
+        node = start if start is not None else root
+        path: List[Tuple[Node, int]] = list(prefix or []) + [(node, self._sign_of(node))]
         depth_guard = 0
         while True:
             if node.is_terminal:

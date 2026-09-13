@@ -162,7 +162,7 @@ def _global_block(out: np.ndarray, off: int, s: GameState, mover: int) -> None:
     out[o + (0 if s.cat < 0 else (1 if s.cat == mover else 2))] = 1.0
     o += 3
     out[o] = 1.0 if s.knows_central(mover) else 0.0
-    out[o + 1] = 1.0 if s.knows_central(1 - mover) else 0.0
+    out[o + 1] = 1.0 if s.has_peeked(1 - mover) else 0.0
     o += 2
     out[o] = min(s.turn, 80) / 80.0
     out[o + 1] = 1.0 if mover == 0 else 0.0
