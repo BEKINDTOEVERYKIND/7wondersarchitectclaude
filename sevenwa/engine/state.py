@@ -17,9 +17,20 @@ not change what a player can achieve):
 1. (Cat holder) peek at the central deck.
 2. Main pick: left (own) deck, right (opponent's) deck or central deck.
 3. Card placed -> immediate effects (Cat pawn, horns) -> Progress-token extra picks that the
-   card triggers -> mandatory construction (with payment choices) -> stage effect ->
-   Architecture extra pick -> mandatory science sets -> Progress token choice -> repeat.
+   card triggers -> mandatory science sets -> Progress token choice -> mandatory construction
+   (with payment choices) -> stage effect -> Architecture extra pick -> repeat until nothing is
+   pending.  Science is resolved before construction so that a token gained this turn
+   (Engineering, Economy, Architecture...) already applies to this turn's build; doing science
+   first never prevents a build (green cards are not building resources), so this order weakly
+   dominates the alternative.  (A token gained mid-turn never fires for a card placed earlier in
+   the same turn, and Olympia's two cards are placed one after the other with a check in between;
+   these are the only ways the fixed order differs from a fully free ordering.)
 4. End of turn: battle (if triggered), game end (if a Wonder is complete), next player.
+
+Payments are sequences of "pay one card" decisions (grey resource, coin, or a coin worth 2 with
+Economy).  Codes must be chosen in non-decreasing order (wood < stone < clay < papyrus < glass <
+coin < coin×2), which removes permutations of the same multiset from the tree: a payment
+decision only appears when genuinely different sets of cards could be spent.
 
 Deck indices are absolute: 0 = player 0's Wonder deck, 1 = player 1's Wonder deck, 2 = central.
 The deck to a player's *left* is their own deck (rulebook: "make a deck between the player to
@@ -83,7 +94,7 @@ class GameState:
         "faceup", "prog_unseen", "prog_stack", "conflict", "cat",
         "mover", "turn", "tokens_used", "econ_used", "battle_pending", "wonder_done", "game_over",
         "queue", "node_type", "dkind", "dctx", "ckind", "cctx", "_legal", "_outcomes",
-        "history_len",
+        "history_len", "observer", "hali_event", "tokens_new",
     )
 
     # ------------------------------------------------------------------ construction
@@ -104,7 +115,9 @@ class GameState:
         s.unseen = [wonder_deck_counts(WONDERS[s.wonder[0]].name), wonder_deck_counts(WONDERS[s.wonder[1]].name),
                     central_deck_counts()]
         s.deck_size = [sum(s.unseen[0]), sum(s.unseen[1]), sum(s.unseen[2])]
-        s.central_known_to = -1
+        s.central_known_to = 0  # bitmask of players who know the central top card
+        s.observer = -1  # player whose belief this state represents (-1: public/omniscient environment view)
+        s.hali_event = None  # (deck, window size, kept kind) when the last transition resolved a Halicarnassus choice
         s.discard = [0] * NUM_KINDS
         s.faceup = []
         s.prog_unseen = [t.copies for t in TOKENS]
@@ -114,6 +127,7 @@ class GameState:
         s.mover = 0
         s.turn = 0
         s.tokens_used = 0
+        s.tokens_new = 0
         s.econ_used = False
         s.battle_pending = False
         s.wonder_done = False
@@ -152,6 +166,7 @@ class GameState:
         s.mover = self.mover
         s.turn = self.turn
         s.tokens_used = self.tokens_used
+        s.tokens_new = self.tokens_new
         s.econ_used = self.econ_used
         s.battle_pending = self.battle_pending
         s.wonder_done = self.wonder_done
@@ -165,6 +180,8 @@ class GameState:
         s._legal = None
         s._outcomes = None
         s.history_len = self.history_len
+        s.observer = self.observer
+        s.hali_event = None
         return s
 
     # ------------------------------------------------------------------ GameState protocol
@@ -231,6 +248,7 @@ class GameState:
             self.deck_top, self.unseen, self.deck_size, self.central_known_to, self.faceup, self.prog_unseen,
             self.conflict, self.cat, self.mover, self.tokens_used, self.econ_used, self.battle_pending,
             self.wonder_done, self.game_over, self.queue, self.node_type, self.dkind, self.dctx, self.ckind, self.cctx,
+            self.observer, self.tokens_new,
         )).encode()
 
     @staticmethod
@@ -287,8 +305,20 @@ class GameState:
     def science_counts(self, p: int) -> List[int]:
         return [self.cards[p][KIND_OF_SYMBOL[s]] for s in range(len(SYMBOLS))]
 
+    def knows_central(self, p: int) -> bool:
+        """Does player ``p`` know the identity of the central deck's top card?"""
+        return p >= 0 and self.deck_top[CENTRAL] >= 0 and bool((self.central_known_to >> p) & 1)
+
     def has_token(self, p: int, tid: int) -> bool:
         return self.tokens[p][tid] > 0
+
+    def _token_active(self, p: int, t: int) -> bool:
+        """Owned, not yet used this turn, and (unless allowed) not gained this very turn."""
+        if not self.tokens[p][t] or (self.tokens_used >> t) & 1:
+            return False
+        if not self.rules.token_usable_same_turn and (self.tokens_new >> t) & 1:
+            return False
+        return True
 
     def tokens_remaining(self) -> int:
         return len(self.faceup) + self.prog_stack
@@ -352,23 +382,35 @@ class GameState:
         m = self.mover
         if op == "turn_start":
             self.tokens_used = 0
+            self.tokens_new = 0
             self.econ_used = False
-            if self.rules.end_when_no_cards and all(n == 0 for n in self.deck_size):
+            if all(n == 0 for n in self.deck_size):
+                # No card can ever be drawn again: the game cannot progress, so it ends here
+                # (``end_when_no_cards`` only controls whether the game *also* ends as soon as the
+                # player to move has no card to draw while other decks are still empty—which is the
+                # same condition in a 2-player game, so both settings coincide).
                 self.game_over = True
                 return False
             self.queue = (("pick", "main", False, _ALL_SOURCES), ("end_turn",)) + self.queue
-            if self.cat == m and self.deck_size[CENTRAL] > 0 and self.central_known_to != m:
-                if self.deck_top[CENTRAL] >= 0:  # sampled/known for the other player: forget it
-                    self.unseen[CENTRAL][self.deck_top[CENTRAL]] += 1
-                    self.deck_top[CENTRAL] = -1
-                    self.central_known_to = -1
+            if self.cat == m and self.deck_size[CENTRAL] > 0 and not self.knows_central(m):
+                if self.deck_top[CENTRAL] >= 0:
+                    # already known to the other player (who must be the observer): the peek reveals that card
+                    self.central_known_to |= 1 << m
+                    return False
                 return self._set_chance(C_PEEK, None, self.unseen[CENTRAL])
             return False
         if op == "pick":
             _, reason, optional, sources = item
+            if reason.startswith("token:") and (self.tokens_used >> int(reason[6:])) & 1:
+                return False  # once per turn: an earlier trigger of this token already took its card
             avail = [d for d in sources if self.deck_size[d] > 0]
             if not avail:
                 return False
+            if (not self.rules.cat_peek_main_draw_only and reason != "main" and self.cat == m and CENTRAL in avail
+                    and not self.knows_central(m)):
+                # house rule: the Cat holder may also peek before an extra draw
+                self._push(item)
+                return self._set_chance(C_PEEK, None, self.unseen[CENTRAL])
             legal = [self._action_of_deck(d) for d in avail]
             if optional:
                 legal.append(A.SKIP)
@@ -429,18 +471,18 @@ class GameState:
             self.deck_top[d] = -1
             self._push(("reveal", d), ("placed", k, d, reason))
             return False
-        # central deck
-        if self.central_known_to == self.mover and self.deck_top[CENTRAL] >= 0:
+        # central deck: deterministic if the mover or the observer knows the top card
+        if self.deck_top[CENTRAL] >= 0 and (self.knows_central(self.mover) or self.knows_central(self.observer)):
             k = self.deck_top[CENTRAL]
             self.deck_top[CENTRAL] = -1
-            self.central_known_to = -1
+            self.central_known_to = 0
             self.deck_size[CENTRAL] -= 1
             self._push(("placed", k, d, reason))
             return False
-        if self.deck_top[CENTRAL] >= 0:  # known only to the opponent: forget the sample
+        if self.deck_top[CENTRAL] >= 0:  # an in-tree sample known only to the other player: forget it
             self.unseen[CENTRAL][self.deck_top[CENTRAL]] += 1
             self.deck_top[CENTRAL] = -1
-            self.central_known_to = -1
+            self.central_known_to = 0
         return self._set_chance(C_DRAW_CENTRAL, reason, self.unseen[CENTRAL])
 
     def _placed(self, k: int, d: int, reason: str) -> None:
@@ -473,17 +515,18 @@ class GameState:
         elif kind.type == RED and kind.horns > 0:
             trig.extend(_PROPAGANDA)
         for t in trig:
-            if self.tokens[m][t] and not (self.tokens_used >> t) & 1:
+            if self._token_active(m, t):
                 self._push(("pick", f"token:{t}", self.rules.extra_card_optional, _ALL_SOURCES))
 
     # ---- mandatory construction & science
     def _check(self) -> bool:
+        """Mandatory actions: science sets first (a new token may apply to this turn's build), then construction."""
         m = self.mover
-        if self.stages[m] < 5 and self._affordable():
-            return self._pay_decision(())
         sci = self._science_options()
         if sci:
             return self._set_decision(D_SCIENCE, None, sci)
+        if self.stages[m] < 5 and self._affordable():
+            return self._pay_decision(())
         return False
 
     def _science_options(self) -> List[int]:
@@ -527,19 +570,29 @@ class GameState:
             return 2
         return 0 if self._stage().kind == IDENTICAL else 1
 
-    def _max_value(self, grey_avail, coins_avail, econ_used, used_res, mode: int) -> int:
+    def _max_value(self, grey_avail, coins_avail, econ_used, used_res, mode: int, min_code: int = 0) -> int:
+        """Largest resource value still reachable, paying in canonical order (codes >= ``min_code``).
+
+        Payments are sequences of codes; requiring non-decreasing codes removes permutations of the
+        same multiset (which would otherwise create redundant decision branches) while keeping every
+        distinct multiset reachable.
+        """
         econ = (not econ_used) and coins_avail >= 1 and any(self.tokens[self.mover][t] for t in _ECONOMY)
-        coin_cap = coins_avail + (1 if econ else 0)
+        coin_cap = (coins_avail if min_code <= PAY_COIN_CODE else 0) + (1 if (econ and min_code <= PAY_COIN2_CODE) else 0)
         if mode == 2:
-            return sum(grey_avail) + coin_cap
+            return sum(grey_avail[r] for r in range(min_code, 5)) + coin_cap
         if mode == 0:
             if used_res:
-                return grey_avail[used_res[0]] + coin_cap
-            return max(grey_avail) + coin_cap
-        return sum(1 for r in range(5) if grey_avail[r] > 0 and r not in used_res) + coin_cap
+                r = used_res[0]
+                return (grey_avail[r] if r >= min_code else 0) + coin_cap
+            return max([grey_avail[r] for r in range(min_code, 5)] + [0]) + coin_cap
+        return sum(1 for r in range(min_code, 5) if grey_avail[r] > 0 and r not in used_res) + coin_cap
 
     def _affordable(self) -> bool:
         grey_avail, coins_avail, value, econ_used, used_res = self._pay_state(())
+        # With ``economy_forces_build`` False the doubled coin does not count towards the *mandatory*
+        # construction check (BGG reading of "you can use"); it may still be spent once building.
+        econ_used = econ_used or not self.rules.economy_forces_build
         return self._max_value(grey_avail, coins_avail, econ_used, used_res, self._mode()) >= self._stage().cost
 
     def _pay_options(self, chosen: Tuple[int, ...]) -> List[int]:
@@ -547,9 +600,10 @@ class GameState:
         mode = self._mode()
         grey_avail, coins_avail, value, econ_used, used_res = self._pay_state(chosen)
         need = cost - value
+        min_code = chosen[-1] if chosen else 0
         opts: List[int] = []
         grey_possible = False
-        for r in range(5):
+        for r in range(min_code, 5):
             if grey_avail[r] <= 0:
                 continue
             if mode == 0 and used_res and used_res[0] != r:
@@ -558,21 +612,21 @@ class GameState:
                 continue
             ga = list(grey_avail)
             ga[r] -= 1
-            if 1 + self._max_value(ga, coins_avail, econ_used, used_res + [r], mode) >= need:
+            if 1 + self._max_value(ga, coins_avail, econ_used, used_res + [r], mode, r) >= need:
                 opts.append(A.PAY_BASE + r)
                 grey_possible = True
         if coins_avail >= 1 and (self.rules.coins_free_choice or not grey_possible):
-            if 1 + self._max_value(grey_avail, coins_avail - 1, econ_used, used_res, mode) >= need:
+            if min_code <= PAY_COIN_CODE and 1 + self._max_value(grey_avail, coins_avail - 1, econ_used, used_res, mode, PAY_COIN_CODE) >= need:
                 opts.append(A.PAY_COIN)
             econ_ok = (not econ_used) and any(self.tokens[self.mover][t] for t in _ECONOMY)
-            if econ_ok and need >= 2 and 2 + self._max_value(grey_avail, coins_avail - 1, True, used_res, mode) >= need:
+            if econ_ok and need >= 2 and 2 + self._max_value(grey_avail, coins_avail - 1, True, used_res, mode, PAY_COIN2_CODE) >= need:
                 opts.append(A.PAY_COIN2)
         return opts
 
     def _pay_decision(self, chosen: Tuple[int, ...]) -> bool:
         opts = self._pay_options(chosen)
-        if not opts:  # cannot happen when affordable; defensive
-            return False
+        if not opts:  # every offered step keeps a completion reachable, so this is an engine bug
+            raise RuntimeError(f"payment dead end: chosen={chosen} stage={self._stage()} cards={self.cards[self.mover]}")
         return self._set_decision(D_PAY, chosen, opts)
 
     def _build(self, chosen: Tuple[int, ...]) -> None:
@@ -585,12 +639,14 @@ class GameState:
                 self.econ_used = True
         stage = self._stage()
         self.stages[m] += 1
+        if self.rules.economy_once_per_build:
+            self.econ_used = False  # the doubled coin may be used again for another stage this turn
         if self.stages[m] >= 5:
             self.wonder_done = True
         # push in reverse execution order: check <- architecture <- effect
         self._push(("check",))
         for t in _ARCHITECTURE:
-            if self.tokens[m][t] and not (self.tokens_used >> t) & 1:
+            if self._token_active(m, t):
                 self._push(("pick", f"token:{t}", self.rules.extra_card_optional, _ALL_SOURCES))
         eff = stage.effect
         opt = self.rules.wonder_effect_optional
@@ -696,6 +752,7 @@ class GameState:
                 t = action - A.TOKEN_BASE
                 self.faceup.remove(t)
                 self.tokens[m][t] += 1
+                self.tokens_new |= 1 << t
                 self._push(("token_reveal",))
         elif kind == D_HALI_DECK:
             if action == A.SKIP:
@@ -713,6 +770,7 @@ class GameState:
             for x in rest:
                 self.unseen[d][x] += 1
             self.deck_size[d] -= 1
+            self.hali_event = (d, len(revealed), k)
             self._push(("reveal", d), ("placed", k, d, "hali"))
         else:  # pragma: no cover
             raise RuntimeError("bad decision kind")
@@ -733,7 +791,7 @@ class GameState:
         elif kind == C_PEEK:
             self.unseen[CENTRAL][outcome] -= 1
             self.deck_top[CENTRAL] = outcome
-            self.central_known_to = self.mover
+            self.central_known_to = 1 << self.mover
         elif kind == C_TOKEN_REVEAL:
             self.prog_unseen[outcome] -= 1
             self.prog_stack -= 1
@@ -742,6 +800,7 @@ class GameState:
             self.prog_unseen[outcome] -= 1
             self.prog_stack -= 1
             self.tokens[self.mover][outcome] += 1
+            self.tokens_new |= 1 << outcome
         elif kind == C_HALI_REVEAL:
             d, remaining, revealed = ctx
             self.unseen[d][outcome] -= 1
@@ -768,7 +827,7 @@ class GameState:
             lines.append(f"     cards: {describe_counts(self.cards[p])}")
         for d in range(3):
             top = KINDS[self.deck_top[d]].name if self.deck_top[d] >= 0 else "?"
-            lines.append(f"  deck{d} size {self.deck_size[d]} top {top}" + (f" (known to P{self.central_known_to})" if d == CENTRAL and self.central_known_to >= 0 else ""))
+            lines.append(f"  deck{d} size {self.deck_size[d]} top {top}" + (f" (known to {[p for p in (0, 1) if self.knows_central(p)]})" if d == CENTRAL and self.central_known_to else ""))
         lines.append("  node: " + self.describe_node())
         return "\n".join(lines)
 

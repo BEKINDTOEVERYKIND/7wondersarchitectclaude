@@ -81,7 +81,20 @@ class Environment:
             if outcome not in probs:
                 raise RuntimeError(f"true outcome {outcome} impossible under belief for chance {kind} {ctx}")
             self.state = s = s.apply_chance(outcome)
+            self._apply_hali_event()
         self._sync_decks()
+
+    def _apply_hali_event(self) -> None:
+        """After a Halicarnassus choice (explicit or auto-resolved): remove the kept card from the
+        physical top-``n`` window and shuffle the whole deck, as the rulebook prescribes."""
+        ev = self.state.hali_event
+        if ev is None:
+            return
+        d, n, kept = ev
+        window = self.decks[d][:n]
+        window.remove(kept)
+        self.decks[d] = self._shuffled(window + self.decks[d][n:])
+        self.state.hali_event = None
 
     # ---- Environment protocol ------------------------------------------------
     def to_move(self) -> int:
@@ -91,35 +104,24 @@ class Environment:
         return self.state.is_terminal()
 
     def observe(self, player: int) -> GameState:
+        """Belief state of ``player``: the central top card is hidden unless ``player`` knows it."""
         s = self.state
-        if s.central_known_to in (-1, player) or s.deck_top[CENTRAL] < 0:
-            return s
         o = s._copy()
-        o.unseen[CENTRAL][o.deck_top[CENTRAL]] += 1
-        o.deck_top[CENTRAL] = -1
-        o.central_known_to = -1
+        o.observer = player
         o._legal = s._legal
         o._outcomes = s._outcomes
+        if s.deck_top[CENTRAL] >= 0 and not s.knows_central(player):
+            o.unseen[CENTRAL][o.deck_top[CENTRAL]] += 1
+            o.deck_top[CENTRAL] = -1
+            o.central_known_to = 0
         return o
 
     def step(self, action: int) -> None:
         s = self.state
         if s.is_chance() or s.is_terminal():
             raise ValueError("environment is not at a decision node")
-        from .state import D_HALI_CHOOSE, A as _A  # local import to avoid cycles
-        hali_choice = (s.dkind == D_HALI_CHOOSE)
-        hali_ctx = s.dctx
         self.state = s.apply_action(action)
-        if hali_choice:
-            # Physical model: the kept card is removed from the top-5 window and the rest of the
-            # deck is shuffled.  The belief already returned the other revealed cards to 'unseen'.
-            d, revealed = hali_ctx
-            kept = action - _A.HALI_BASE
-            n = len(revealed)
-            window = self.decks[d][:n]
-            window.remove(kept)
-            rest = window + self.decks[d][n:]
-            self.decks[d] = self._shuffled(rest)
+        self._apply_hali_event()
         self._resolve_chance()
 
     def returns(self) -> Tuple[float, float]:

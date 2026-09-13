@@ -61,11 +61,11 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg.grad_clip)
             self.opt.step()
             self.total_steps += 1
-            parts["total"] = float(loss)
+            parts["total"] = loss.item()
             for k, v in parts.items():
                 agg[k] = agg.get(k, 0.0) + v
             if (step + 1) % max(1, steps // 5) == 0 or step == steps - 1:
-                log(f"  step {step + 1}/{steps} loss {float(loss):.4f} policy {parts['policy']:.4f} "
+                log(f"  step {step + 1}/{steps} loss {loss.item():.4f} policy {parts['policy']:.4f} "
                     f"value {parts['value']:.4f} score {parts['score']:.4f} acc {parts['acc']:.3f} lr {lr:.2e}")
         self.net.eval()
         return {k: v / steps for k, v in agg.items()} | {"steps": steps, "samples": n}

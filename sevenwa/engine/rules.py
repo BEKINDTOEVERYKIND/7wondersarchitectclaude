@@ -19,11 +19,17 @@ class RulesConfig:
     extra_card_optional: bool = True
     # Wonder-stage card effects (Alexandria/Ephesus/Olympia/Halicarnassus): mandatory (default) or may be skipped.
     wonder_effect_optional: bool = False
-    # Economy: at most one doubled coin per stage construction.
-    economy_once_per_build: bool = True
+    # Economy: the doubled coin may be used once per turn (False, rulebook: "each Progress token can only
+    # be used once per turn") or once per stage construction (True, house rule).
+    economy_once_per_build: bool = False
+    # Economy's doubled coin counts towards the *mandatory* construction check (BGA reading, True) or
+    # only becomes usable once the stage is affordable without it (BGG "you can use" reading, False).
+    economy_forces_build: bool = True
     # Coins may replace any resource even when a grey card is available (free payment choice).
     coins_free_choice: bool = True
-    # End the game when no card can be drawn by the player to move (all decks empty).
+    # Kept for configuration compatibility: in a 2-player game every player draws from the same three
+    # decks, so "the player to move cannot draw" == "all decks are empty", and the engine always ends
+    # the game then (otherwise no progress is possible).  The flag therefore has no effect.
     end_when_no_cards: bool = True
     # Progress tokens taken this turn may be used this same turn (rulebook: "whenever you want").
     token_usable_same_turn: bool = True

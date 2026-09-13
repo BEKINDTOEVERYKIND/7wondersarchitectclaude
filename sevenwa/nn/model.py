@@ -141,5 +141,5 @@ def compute_loss(net: PolicyValueNet, feats: torch.Tensor, mask: torch.Tensor, p
     total = policy_loss + value_loss + score_weight * score_loss
     with torch.no_grad():
         acc = (logits.argmax(-1) == pi.argmax(-1)).float().mean()
-    return total, {"policy": float(policy_loss), "value": float(value_loss), "score": float(score_loss),
-                   "acc": float(acc)}
+    return total, {"policy": policy_loss.item(), "value": value_loss.item(), "score": score_loss.item(),
+                   "acc": acc.item()}

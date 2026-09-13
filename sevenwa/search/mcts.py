@@ -158,7 +158,7 @@ class MCTS:
         if root.is_chance or root.is_terminal:
             raise ValueError("MCTS.run requires a non-terminal decision node at the root")
         if not root.expanded:
-            self._expand_batch([(root, [(root, 1)])])
+            self.expand_root(root)
         if add_noise:
             self._add_dirichlet_noise(root)
 
@@ -180,6 +180,12 @@ class MCTS:
 
         self._root = root
         return self._result(root)
+
+    def expand_root(self, root: Node) -> None:
+        """Evaluate and expand an unexpanded root (virtual loss applied then removed)."""
+        path = [(root, 1 if root.to_move == 0 else -1)]
+        self._apply_virtual_loss(path)
+        self._expand_batch([(root, path)])
 
     def advance(self, action_or_outcome: int) -> None:
         """Move the retained root down one edge (for tree reuse between moves)."""
