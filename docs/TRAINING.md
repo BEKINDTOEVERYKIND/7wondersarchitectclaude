@@ -219,12 +219,25 @@ mean margin) against the tuned heuristic** — the strongest agent so far and th
 network; `scripts/heuristic_tune.py` automates the teacher tuning (coordinate descent with paired
 A/B confirmation) for the next rounds.
 
+### Expert iteration round 2 (`runs/ei2`): the first accepted improvement over imitation
+
+Teacher `imitation_v5`, 3 000 Gumbel-search games (96 simulations, 176 000 samples, 108 min on
+3 workers), fine-tuned for 2 epochs on 70 % search data / 30 % imitation data with
+`--value-mix 0.3`: the candidate's fit to the search targets rose from 65.5 % to 72.4 % held-out
+accuracy, and in the decisive 40-game match at 300 simulations it beat its teacher **25-15
+(62.5 %, +4.4 mean margin)**.  It is shipped as `models/expert_v6.pt` (16-8 vs the tuned
+heuristic in a 24-game check).  Round 1 (teacher v4, 2 400 games) had drawn 20-20: the
+difference is the stronger teacher — search-play data is only richer than imitation data once
+the searcher clearly outplays the imitated policy.  Round 3 (`runs/ei3`, teacher v6, the
+round-2 shards accumulated) is the next step and takes ~2.5 h per round on this box.
+
 ### Play settings for the shipped model
 
-`imitation_v5` benefits from deeper search (unlike the first imitation network): at 600
-simulations it beats itself at 150 simulations 15-9 (62.5 %).  For the strongest play use as
-many simulations as your time budget allows, e.g. `net:models/imitation_v5.pt:600` (about
-0.5 s per decision on one CPU core); the optional value temperature (`:1.75:1.45`) is neutral.
+`imitation_v5` (and its descendant `expert_v6`) benefit from deeper search, unlike the first
+imitation network: at 600 simulations v5 beats itself at 150 simulations 15-9 (62.5 %).  For
+the strongest play use as many simulations as your time budget allows, e.g.
+`net:models/expert_v6.pt:600` (about 0.5 s per decision on one CPU core); the optional value
+temperature (`:1.75:1.45`) is neutral.
 
 ### Reproducing
 

@@ -32,15 +32,14 @@ sevenwa arena --a hybrid:runs/v1/ckpt/champion.pt:200:0.5 --b heuristic --games 
 
 ## Agent ladder (measured during development, see `docs/TRAINING.md`)
 
-`random` ≪ `heuristic` (tuned expert policy) ≈ `rollout:200:1` < `net:models/imitation_v3.pt:300`
-(first imitation network: 67 % vs the original heuristic) < **`net:models/imitation_v5.pt:300`**
-(imitation of the A/B-tuned heuristic with a 384×5 network: 60 % vs the previous best network
-head-to-head, 87.5 % vs the tuned heuristic, +6.6 points mean margin).  Pure self-play from a
-random or tiny bootstrap over-fits its replay window on a small budget, and one round of expert
-iteration was a draw; `docs/TRAINING.md` documents every measurement.
+`random` ≪ `heuristic` (A/B-tuned expert policy) ≈ `rollout:200:1` < `net:models/imitation_v3.pt:300`
+< `net:models/imitation_v5.pt:300` (imitation of the tuned heuristic, 384×5 network: 87.5 % vs the
+tuned heuristic) < **`net:models/expert_v6.pt:300`** (one round of expert iteration on 3 000
+search-play games: 25-15 head-to-head against v5, 66.7 % vs the heuristic in a 24-game sample).
+Deeper search helps these networks (600 simulations beat 150 by 62.5 %).
 
 ```bash
-sevenwa play --ai net:models/imitation_v5.pt:300      # play the strongest shipped agent
+sevenwa play --ai net:models/expert_v6.pt:600         # play the strongest shipped agent
 ```
 
 ## Layout
