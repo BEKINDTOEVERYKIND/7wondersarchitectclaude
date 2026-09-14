@@ -106,15 +106,15 @@ class HeuristicParams:
 
     # --- wonder construction
     w_stage_vp: float = 1.0          # weight of the printed stage VP
-    tempo_bonus: float = 3.0         # extra value of completing any stage (race / engine effects)
+    tempo_bonus: float = 5.0         # extra value of completing any stage (race / engine effects); A/B-tuned (was 3.0)
     res_unit: float = 1.0            # on-plan resource value = res_unit * stage_value / cost
     res_discount: float = 0.85       # per extra card still missing after this one
     future_stage_factor: float = 0.45  # value of a card that only fits the *following* stage
-    coin_flex: float = 0.4           # bonus for coins (wild resource)
+    coin_flex: float = 0.8           # bonus for coins (wild resource); A/B-tuned (was 0.4)
     late_stage_penalty: float = 0.4  # multiplier when the stage cannot be finished in the remaining turns
     win_bonus: float = 60.0          # completing the 5th stage while ahead (game ends, we win)
     lose_penalty: float = 30.0       # completing the 5th stage while behind (game ends, we lose)
-    extra_card_value: float = 4.0    # value of one extra pick (token / wonder effect)
+    extra_card_value: float = 6.0    # value of one extra pick (token / wonder effect); A/B-tuned (was 4.0)
     # --- blue / cat
     w_blue: float = 1.0
     cat_value: float = 0.8           # expected value of holding the Cat (2 VP, may be stolen)
@@ -125,7 +125,7 @@ class HeuristicParams:
     sci_phi2: float = 0.62           # potential of two different symbols
     sci_token_factor: float = 0.9    # discount of the best available token (it may be gone later)
     # --- progress tokens
-    tok_extra_scale: float = 0.6     # scale of extra-card tokens (uncertainty / time)
+    tok_extra_scale: float = 0.9     # scale of extra-card tokens (uncertainty / time); A/B-tuned (was 0.6)
     builds_per_turn: float = 0.35    # expected stage completions per remaining turn
     res_tok_freq: float = 0.22       # fraction of future picks triggering a resource token
     green_tok_freq: float = 0.15
@@ -146,7 +146,7 @@ class HeuristicParams:
     pb_per_conflict: float = 0.2
     pb_max: float = 0.9
     horn_accel: float = 0.12         # extra battle probability per horn
-    mil_lookahead: int = 3           # a shield may be the first of k needed to change the battle outcome
+    mil_lookahead: int = 2           # a shield may be the first of k needed to change the battle outcome; A/B-tuned (was 3)
     mil_step_discount: float = 0.8   # per additional shield still needed
     future_battle_weight: float = 0.5  # weight of battles after the next one (permanent shields only)
     perm_shield_bonus: float = 0.4   # hornless shields survive battles
