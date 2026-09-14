@@ -26,13 +26,13 @@ from sevenwa.engine import Actions as A
 from sevenwa.engine import GameState, RulesConfig
 from sevenwa.engine.cards import NUM_KINDS, central_deck_counts, wonder_deck_counts
 from sevenwa.engine.state import (C_DRAW_CENTRAL, C_HALI_REVEAL, C_PEEK, C_REVEAL, C_TOKEN_BLIND, C_TOKEN_REVEAL, CENTRAL,
-                                  D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_PICK, D_SCIENCE, D_TOKEN)
+                                  D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_PICK, D_SCIENCE, D_STAGE, D_TOKEN)
 from sevenwa.engine.tokens import TOKENS, TOTAL_TOKEN_COPIES
 from sevenwa.engine.wonders import (E_ANY_DECK, E_CENTRAL, E_LEFT_RIGHT, E_LOOK5, E_NONE, E_SHIELD, E_TOKEN, WONDERS,
                                     WONDER_BY_NAME)
 from sevenwa.game import CHANCE
 
-from conftest import (DEFAULT_FACEUP, GREEN_KINDS, K, T, W, assert_invariants, assert_node_sane, check, drain_deck, edit,
+from conftest import (DEFAULT_FACEUP, GREEN_KINDS, K, T, W, assert_invariants, assert_node_sane, check, drain_deck, edit, first_n,
                       exhaust_tokens, first_pick, give, give_many, give_token, in_transit, initial_composition,
                       is_main_pick_of, is_pick, most_likely, pay_through, payment_leaves, random_game, run, set_deck,
                       set_faceup, set_top, settle, take_card)
@@ -64,8 +64,39 @@ class TestData:
             eff, n = effects[w.name]
             assert sum(1 for st in w.stages if st.effect == eff and eff != E_NONE) == n
             assert all(st.effect in (E_NONE, eff) for st in w.stages)
-        rhodes = WONDER_BY_NAME["Rhodes"]
-        assert [i for i, st in enumerate(rhodes.stages) if st.effect == E_SHIELD] == [1, 3]
+        # exact boards (user-supplied component photographs): VP per stage in cost order, effect stages, prerequisites
+        boards = {
+            "Alexandria": ([4, 3, 6, 5, 7], [1, 3], [(), (0,), (1,), (2,), (3,)]),
+            "Babylon": ([3, 0, 5, 5, 7], [1, 3], [(), (0,), (1,), (2,), (2,)]),
+            "Ephesus": ([3, 3, 4, 5, 7], [1, 2, 3], [(), (0,), (0,), (0,), (1, 2, 3)]),
+            "Giza": ([4, 5, 6, 7, 8], [], [(), (0,), (1,), (2,), (3,)]),
+            "Halicarnassus": ([3, 3, 6, 5, 7], [1, 3], [(), (0,), (1,), (1,), (2, 3)]),
+            "Olympia": ([3, 2, 5, 5, 7], [1, 3], [(), (0,), (0,), (1, 2), (3,)]),
+            "Rhodes": ([4, 4, 5, 6, 7], [0, 3], [(), (), (0, 1), (2,), (3,)]),
+        }
+        for name, (vps, eff_at, reqs) in boards.items():
+            w = WONDER_BY_NAME[name]
+            assert [st.vp for st in w.stages] == vps, name
+            assert [i for i, st in enumerate(w.stages) if st.effect != E_NONE] == eff_at, name
+            assert [st.requires for st in w.stages] == reqs, name
+            assert [(st.cost, st.kind) for st in w.stages] == [(2, 1), (2, 0), (3, 1), (3, 0), (4, 1)], name
+
+    def test_wonder_stage_graphs(self):
+        """``available`` follows the printed tray diagrams; every Wonder is completable; VP/cost tables agree."""
+        rhodes, babylon, ephesus = WONDER_BY_NAME["Rhodes"], WONDER_BY_NAME["Babylon"], WONDER_BY_NAME["Ephesus"]
+        assert rhodes.available(0) == (0, 1) and rhodes.available(0b00001) == (1,) and rhodes.available(0b00010) == (0,)
+        assert rhodes.available(0b00011) == (2,) and rhodes.available(0b00111) == (3,)
+        assert babylon.available(0b00111) == (3, 4) and babylon.available(0b10111) == (3,)
+        assert ephesus.available(0b00001) == (1, 2, 3) and ephesus.available(0b01011) == (2,)
+        assert ephesus.available(0b01111) == (4,)
+        for w in WONDERS:
+            assert w.available(0) == ((0, 1) if w.name == "Rhodes" else (0,))
+            assert w.available(31) == () and w.vp_of_built(31) == w.total_vp and w.cost_remaining(31) == 0
+            assert w.vp_of_built(0) == 0 and w.cost_remaining(0) == 14
+            assert sorted(w.plan(0)) == [0, 1, 2, 3, 4]
+            for mask in range(32):
+                for i in w.available(mask):
+                    assert not (mask >> i) & 1 and (mask & w.stages[i].prereq_mask) == w.stages[i].prereq_mask
 
     def test_progress_tokens(self):
         assert len(TOKENS) == 14
@@ -153,7 +184,7 @@ class TestActions:
 
     def test_num_actions_matches(self):
         assert GameState.num_actions() == A.NUM
-        assert A.NUM == A.HALI_BASE + NUM_KINDS
+        assert A.STAGE_BASE == A.HALI_BASE + NUM_KINDS and A.NUM == A.STAGE_BASE + 5
         assert A.TOKEN_BLIND == A.TOKEN_BASE + len(TOKENS)
         assert A.SCI_TRIPLE == A.SCI_PAIR_BASE + 3
         assert A.PAY_COIN == A.PAY_BASE + 5 and A.PAY_COIN2 == A.PAY_COIN + 1
@@ -189,7 +220,7 @@ class TestInvariantsOverRandomGames:
                     stats["pay_decisions"] += 1
                 elif after.dkind == D_PICK and after.dctx[0].startswith("token:"):
                     stats["extra_picks"] += 1
-            if sum(after.stages) > sum(before.stages):
+            if after.num_stages(0) + after.num_stages(1) > before.num_stages(0) + before.num_stages(1):
                 stats["builds"] += 1
             if sum(map(sum, after.tokens)) > sum(map(sum, before.tokens)):
                 stats["tokens"] += 1
@@ -210,7 +241,7 @@ class TestInvariantsOverRandomGames:
                 assert r in ((1.0, -1.0), (-1.0, 1.0), (0.0, 0.0))
             assert final.score_diff() == s0 - s1
             if final.wonder_done:
-                assert max(final.stages) == 5
+                assert max(final.num_stages(0), final.num_stages(1)) == 5
         # the property tests above are not vacuous: every rule area was exercised.  (A science *choice*
         # -- pair vs triple -- needs the Science token's extra pick to bring a 4th green card in one
         # turn and shows up only once in a few hundred random games; it is covered deterministically
@@ -242,7 +273,7 @@ class TestPicks:
         assert abs(outs[K.wood] - 1 / 24) < 1e-12  # 2 wood in the Giza deck, one was on top
         s = s.apply_chance(K.clay)
         assert s.cards[0][K.wood] == 1
-        assert s.deck_size[0] == 24 and s.deck_top[0] == K.clay and s.unseen[0][K.clay] == 1
+        assert s.deck_size[0] == 24 and s.deck_top[0] == K.clay and s.unseen[0][K.clay] == 0  # Giza's single clay
         assert s.to_move() == 1 and s.turn == 1 and is_main_pick_of(s, 1)
         assert_invariants(s)
 
@@ -472,7 +503,7 @@ class TestCat:
 # =====================================================================================
 def giza_with(base: GameState, stage: int, kinds: List[int], tokens: List[int] = ()) -> GameState:
     c = edit(base)
-    c.stages[0] = stage
+    c.built[0] = first_n(stage)
     give_many(c, 0, kinds)
     for t in tokens:
         give_token(c, 0, t)
@@ -485,14 +516,14 @@ class TestConstruction:
         before = c.score_of(0)
         s = check(c)
         assert is_main_pick_of(s, 1)  # no payment decision was exposed
-        assert s.stages[0] == 2
+        assert s.num_stages(0) == 2
         assert s.cards[0][K.wood] == 0 and s.discard[K.wood] == 2
         assert s.score_of(0) == before + WONDERS[W.Giza].stages[1].vp
         assert_invariants(s)
 
     def test_exact_different_resources_build(self, base):
         s, taken = pay_through(check(giza_with(base, 0, [K.wood, K.stone])))
-        assert s.stages[0] == 1 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 1 and is_main_pick_of(s, 1)
         assert s.cards[0][K.wood] == 0 and s.cards[0][K.stone] == 0
         assert s.discard[K.wood] == 1 and s.discard[K.stone] == 1
         assert s.score_of(0) == WONDERS[W.Giza].stages[0].vp
@@ -504,60 +535,60 @@ class TestConstruction:
 
     def test_identical_requirement_not_met_by_different_cards(self, base):
         s = check(giza_with(base, 1, [K.wood, K.stone]))
-        assert s.stages[0] == 1 and s.cards[0][K.wood] == 1 and s.cards[0][K.stone] == 1
+        assert s.num_stages(0) == 1 and s.cards[0][K.wood] == 1 and s.cards[0][K.stone] == 1
         assert is_main_pick_of(s, 1)
 
     def test_different_requirement_not_met_by_identical_cards(self, base):
         s = check(giza_with(base, 0, [K.wood, K.wood]))
-        assert s.stages[0] == 0 and s.cards[0][K.wood] == 2
+        assert s.num_stages(0) == 0 and s.cards[0][K.wood] == 2
 
     def test_three_different_needs_three_distinct_resources(self, base):
-        assert check(giza_with(base, 2, [K.wood, K.wood, K.stone])).stages[0] == 2
+        assert check(giza_with(base, 2, [K.wood, K.wood, K.stone])).num_stages(0) == 2
         s, _ = pay_through(check(giza_with(base, 2, [K.wood, K.clay, K.stone])))
-        assert s.stages[0] == 3 and sum(s.cards[0]) == 0
+        assert s.num_stages(0) == 3 and sum(s.cards[0]) == 0
 
     def test_surplus_cards_are_kept(self, base):
         s = check(giza_with(base, 1, [K.wood, K.wood, K.wood, K.civ3]))
-        assert s.stages[0] == 2 and s.cards[0][K.wood] == 1 and s.cards[0][K.civ3] == 1
+        assert s.num_stages(0) == 2 and s.cards[0][K.wood] == 1 and s.cards[0][K.civ3] == 1
 
     def test_coins_are_wild_for_identical(self, base):
         s, _ = pay_through(check(giza_with(base, 1, [K.wood, K.coin])))
-        assert s.stages[0] == 2 and s.discard[K.wood] == 1 and s.discard[K.coin] == 1
+        assert s.num_stages(0) == 2 and s.discard[K.wood] == 1 and s.discard[K.coin] == 1
 
     def test_two_coins_build_identical_without_a_choice(self, base):
         s = check(giza_with(base, 1, [K.coin, K.coin]))
-        assert is_main_pick_of(s, 1) and s.stages[0] == 2 and s.discard[K.coin] == 2
+        assert is_main_pick_of(s, 1) and s.num_stages(0) == 2 and s.discard[K.coin] == 2
 
     def test_coins_are_wild_for_different(self, base):
         s = check(giza_with(base, 0, [K.coin, K.coin]))
-        assert s.stages[0] == 1 and s.discard[K.coin] == 2
+        assert s.num_stages(0) == 1 and s.discard[K.coin] == 2
         s, _ = pay_through(check(giza_with(base, 2, [K.wood, K.coin, K.coin])))
-        assert s.stages[0] == 3 and sum(s.cards[0]) == 0
+        assert s.num_stages(0) == 3 and sum(s.cards[0]) == 0
 
     def test_mandatory_even_with_a_coin(self, base):
         """The rulebook: coins *must* replace missing resources (BGG 'Mandatory or not?')."""
         s, _ = pay_through(check(giza_with(base, 0, [K.wood, K.coin])))
-        assert s.stages[0] == 1
+        assert s.num_stages(0) == 1
 
     def test_payment_choice_when_several_payments_are_valid(self, base):
         """wood / stone / clay for "2 different" are three multisets.  Payments are sequences of codes
         in canonical (non-decreasing) order -- wood 0 < stone 1 < clay 2 -- so a decision only
         branches between genuinely different multisets and clay can never be the *first* card."""
         s = check(giza_with(base, 0, [K.wood, K.stone, K.clay]))
-        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx == ()
+        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx[1] == ()
         assert list(s.legal_actions()) == [A.PAY_BASE + 0, A.PAY_BASE + 1]
         assert_node_sane(s)
         s1 = s.apply_action(A.PAY_BASE + 0)
-        assert s1.dkind == D_PAY and s1.dctx == (0,)
+        assert s1.dkind == D_PAY and s1.dctx[1] == (0,)
         assert list(s1.legal_actions()) == [A.PAY_BASE + 1, A.PAY_BASE + 2]
         assert_node_sane(s1)
         s2 = s1.apply_action(A.PAY_BASE + 1)
-        assert s2.stages[0] == 1 and is_main_pick_of(s2, 1)
+        assert s2.num_stages(0) == 1 and is_main_pick_of(s2, 1)
         assert s2.cards[0][K.clay] == 1 and s2.discard[K.wood] == 1 and s2.discard[K.stone] == 1
         assert_invariants(s2)
         # stone first: wood (a lower code) may not follow, clay is forced -> auto-resolved, wood is kept
         s3 = s.apply_action(A.PAY_BASE + 1)
-        assert s3.stages[0] == 1 and is_main_pick_of(s3, 1)
+        assert s3.num_stages(0) == 1 and is_main_pick_of(s3, 1)
         assert s3.cards[0][K.wood] == 1 and s3.discard[K.stone] == 1 and s3.discard[K.clay] == 1
         assert_invariants(s3)
 
@@ -565,24 +596,24 @@ class TestConstruction:
         """wood / wood / coin for "2 identical": {wood, wood} or {wood, coin}.  The first wood is forced
         (a coin first could not be followed by a wood), the second card is the real choice."""
         s = check(giza_with(base, 1, [K.wood, K.wood, K.coin]))
-        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx == (0,)
+        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx[1] == (0,)
         assert list(s.legal_actions()) == [A.PAY_BASE + 0, A.PAY_COIN]
         assert_node_sane(s)
         kept_coin = s.apply_action(A.PAY_BASE + 0)
-        assert kept_coin.stages[0] == 2 and kept_coin.cards[0][K.coin] == 1 and kept_coin.cards[0][K.wood] == 0
+        assert kept_coin.num_stages(0) == 2 and kept_coin.cards[0][K.coin] == 1 and kept_coin.cards[0][K.wood] == 0
         kept_wood = s.apply_action(A.PAY_COIN)
-        assert kept_wood.stages[0] == 2 and kept_wood.cards[0][K.coin] == 0 and kept_wood.cards[0][K.wood] == 1
+        assert kept_wood.num_stages(0) == 2 and kept_wood.cards[0][K.coin] == 0 and kept_wood.cards[0][K.wood] == 1
         assert is_main_pick_of(kept_coin, 1) and is_main_pick_of(kept_wood, 1)
 
     def test_grey_is_never_offered_after_a_coin(self, base):
         """Coin codes (5, 6) are above every grey code: wood / coin / coin for "2 different" is either
         {wood, coin} or {coin, coin}; once a coin is paid the wood is no longer an option."""
         s = check(giza_with(base, 0, [K.wood, K.coin, K.coin]))
-        assert s.dkind == D_PAY and s.dctx == () and list(s.legal_actions()) == [A.PAY_BASE + 0, A.PAY_COIN]
+        assert s.dkind == D_PAY and s.dctx[1] == () and list(s.legal_actions()) == [A.PAY_BASE + 0, A.PAY_COIN]
         coins = s.apply_action(A.PAY_COIN)  # the second coin is forced
-        assert coins.stages[0] == 1 and coins.cards[0][K.wood] == 1 and coins.cards[0][K.coin] == 0
+        assert coins.num_stages(0) == 1 and coins.cards[0][K.wood] == 1 and coins.cards[0][K.coin] == 0
         wood = s.apply_action(A.PAY_BASE + 0)  # a coin is forced (the only kind left)
-        assert wood.stages[0] == 1 and wood.cards[0][K.wood] == 0 and wood.cards[0][K.coin] == 1
+        assert wood.num_stages(0) == 1 and wood.cards[0][K.wood] == 0 and wood.cards[0][K.coin] == 1
         assert is_main_pick_of(coins, 1) and is_main_pick_of(wood, 1)
         assert_invariants(coins)
 
@@ -592,69 +623,69 @@ class TestConstruction:
         for kinds in ([K.wood, K.wood, K.coin], [K.wood, K.wood, K.wood, K.coin]):
             s = check(giza_with(base, 3, kinds))
             for leaf in payment_leaves(s):
-                assert leaf.stages[0] == 4, leaf.describe()
+                assert leaf.num_stages(0) == 4, leaf.describe()
 
     def test_coins_only_when_no_grey_possible_if_free_choice_disabled(self):
         b = first_pick(rules=RulesConfig(coins_free_choice=False))
         s = check(giza_with(b, 0, [K.wood, K.stone, K.coin]))
         assert s.dkind == D_PAY and A.PAY_COIN not in s.legal_actions()
         s = s.apply_action(A.PAY_BASE + 0)  # stone is then forced (no coin offered)
-        assert s.stages[0] == 1 and s.cards[0][K.coin] == 1
+        assert s.num_stages(0) == 1 and s.cards[0][K.coin] == 1
         s = check(giza_with(b, 0, [K.wood, K.coin]))  # coin needed -> offered
-        assert s.stages[0] == 1 and s.cards[0][K.coin] == 0
+        assert s.num_stages(0) == 1 and s.cards[0][K.coin] == 0
 
     def test_engineering_ignores_identical_and_different(self, base):
-        assert check(giza_with(base, 1, [K.wood, K.stone])).stages[0] == 1
+        assert check(giza_with(base, 1, [K.wood, K.stone])).num_stages(0) == 1
         s, _ = pay_through(check(giza_with(base, 1, [K.wood, K.stone], [T.Engineering])))
-        assert s.stages[0] == 2 and s.discard[K.wood] == 1 and s.discard[K.stone] == 1
-        assert check(giza_with(base, 0, [K.wood, K.wood], [T.Engineering])).stages[0] == 1
+        assert s.num_stages(0) == 2 and s.discard[K.wood] == 1 and s.discard[K.stone] == 1
+        assert check(giza_with(base, 0, [K.wood, K.wood], [T.Engineering])).num_stages(0) == 1
         s, _ = pay_through(check(giza_with(base, 4, [K.wood, K.wood, K.coin, K.stone], [T.Engineering])))
-        assert s.stages[0] == 5
+        assert s.num_stages(0) == 5
 
     def test_economy_one_coin_worth_two(self, base):
-        assert check(giza_with(base, 0, [K.coin])).stages[0] == 0
+        assert check(giza_with(base, 0, [K.coin])).num_stages(0) == 0
         s = check(giza_with(base, 0, [K.coin], [T.Economy]))
-        assert s.stages[0] == 1 and s.discard[K.coin] == 1 and s.cards[0][K.coin] == 0
+        assert s.num_stages(0) == 1 and s.discard[K.coin] == 1 and s.cards[0][K.coin] == 0
         s = check(giza_with(base, 1, [K.coin], [T.Economy]))  # identical too
-        assert s.stages[0] == 2
+        assert s.num_stages(0) == 2
 
     def test_economy_at_most_once_per_build(self, base):
         """Giza's 5th stage (4 different) paid with coins only: one coin may be doubled, never two."""
-        assert check(giza_with(base, 4, [K.coin, K.coin], [T.Economy])).stages[0] == 4  # 2 + 1 < 4
+        assert check(giza_with(base, 4, [K.coin, K.coin], [T.Economy])).num_stages(0) == 4  # 2 + 1 < 4
         # 3 coins: {coin, coin, coin x2} is the only payment -> no decision, the game ends (5th stage)
         s = check(giza_with(base, 4, [K.coin, K.coin, K.coin], [T.Economy]))
-        assert s.is_terminal() and s.stages[0] == 5 and s.discard[K.coin] == 3 and s.cards[0][K.coin] == 0
+        assert s.is_terminal() and s.num_stages(0) == 5 and s.discard[K.coin] == 3 and s.cards[0][K.coin] == 0
         assert s.econ_used
         # 4 coins: {coin x4} or {coin x3, one doubled}; the doubled coin (highest code) is the last card
         c = giza_with(base, 4, [K.coin] * 4, [T.Economy])
         s = check(c)
-        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx == (5, 5)
+        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx[1] == (5, 5)
         assert list(s.legal_actions()) == [A.PAY_COIN, A.PAY_COIN2]
         assert_node_sane(s)
         doubled = s.apply_action(A.PAY_COIN2)
-        assert doubled.is_terminal() and doubled.stages[0] == 5 and doubled.cards[0][K.coin] == 1 and doubled.econ_used
+        assert doubled.is_terminal() and doubled.num_stages(0) == 5 and doubled.cards[0][K.coin] == 1 and doubled.econ_used
         plain = s.apply_action(A.PAY_COIN)  # the 4th coin is forced
-        assert plain.is_terminal() and plain.stages[0] == 5 and plain.cards[0][K.coin] == 0 and not plain.econ_used
+        assert plain.is_terminal() and plain.num_stages(0) == 5 and plain.cards[0][K.coin] == 0 and not plain.econ_used
         # a second doubled coin is never offered: not after one (nothing follows code 6) nor for 1 missing
-        assert A.PAY_COIN2 not in c._pay_options((5, 6)) and c._pay_options((5, 5, 5)) == [A.PAY_COIN]
+        assert A.PAY_COIN2 not in c._pay_options(4, (5, 6)) and c._pay_options(4, (5, 5, 5)) == [A.PAY_COIN]
 
     def test_economy_offered_only_when_two_more_are_needed(self, base):
         """The doubled coin is the last code of a payment, so it is offered exactly when 2 resources
         are still missing (it would overpay for 1; with 3+ missing nothing could follow it)."""
         c = giza_with(base, 2, [K.wood, K.coin, K.coin], [T.Economy])  # cost 3 different
         s = check(c)
-        assert s.dkind == D_PAY and s.dctx == () and list(s.legal_actions()) == [A.PAY_BASE + 0, A.PAY_COIN]
+        assert s.dkind == D_PAY and s.dctx[1] == () and list(s.legal_actions()) == [A.PAY_BASE + 0, A.PAY_COIN]
         s = s.apply_action(A.PAY_BASE + 0)  # 2 missing: plain coin or doubled coin
-        assert s.dkind == D_PAY and s.dctx == (0,) and list(s.legal_actions()) == [A.PAY_COIN, A.PAY_COIN2]
+        assert s.dkind == D_PAY and s.dctx[1] == (0,) and list(s.legal_actions()) == [A.PAY_COIN, A.PAY_COIN2]
         assert_node_sane(s)
         two = s.apply_action(A.PAY_COIN2)
-        assert two.stages[0] == 3 and two.discard[K.coin] == 1 and two.discard[K.wood] == 1 and two.cards[0][K.coin] == 1
+        assert two.num_stages(0) == 3 and two.discard[K.coin] == 1 and two.discard[K.wood] == 1 and two.cards[0][K.coin] == 1
         one = s.apply_action(A.PAY_COIN)  # 1 missing: a 2-coin payment would overpay, the plain coin is forced
-        assert one.stages[0] == 3 and one.discard[K.coin] == 2 and one.discard[K.wood] == 1 and one.cards[0][K.coin] == 0
-        assert c._pay_options((0, 5)) == [A.PAY_COIN]
+        assert one.num_stages(0) == 3 and one.discard[K.coin] == 2 and one.discard[K.wood] == 1 and one.cards[0][K.coin] == 0
+        assert c._pay_options(2, (0, 5)) == [A.PAY_COIN]
         # coin first: the wood may not follow a coin, the doubled coin completes the payment
         coin_first = check(c).apply_action(A.PAY_COIN)
-        assert coin_first.stages[0] == 3 and coin_first.cards[0][K.wood] == 1 and coin_first.cards[0][K.coin] == 0
+        assert coin_first.num_stages(0) == 3 and coin_first.cards[0][K.wood] == 1 and coin_first.cards[0][K.coin] == 0
 
     def test_economy_is_once_per_turn_not_once_per_build(self, base):
         """Two builds in one turn: the doubled coin is available only once (rulebook: each token once
@@ -662,13 +693,13 @@ class TestConstruction:
         s = check(giza_with(base, 0, [K.coin, K.coin], [T.Economy]))
         assert s.dkind == D_PAY and set(s.legal_actions()) == {A.PAY_COIN, A.PAY_COIN2}
         s = s.apply_action(A.PAY_COIN2)
-        assert s.stages[0] == 1 and s.cards[0][K.coin] == 1
+        assert s.num_stages(0) == 1 and s.cards[0][K.coin] == 1
         assert is_main_pick_of(s, 1)  # stage 2 (2 identical) is NOT built: 1 coin, Economy spent
 
     def test_economy_is_reset_at_the_next_turn(self, base):
         # the Architecture extra pick keeps the turn open after the build so that econ_used can be observed
         s = check(giza_with(base, 0, [K.coin], [T.Economy, T.Architecture]))
-        assert s.stages[0] == 1 and s.cards[0][K.coin] == 0 and s.econ_used
+        assert s.num_stages(0) == 1 and s.cards[0][K.coin] == 0 and s.econ_used
         assert is_pick(s, f"token:{T.Architecture}", 0)
         s = s.apply_action(A.SKIP)
         assert is_main_pick_of(s, 1) and not s.econ_used  # per turn: cleared for the opponent's turn
@@ -677,7 +708,7 @@ class TestConstruction:
         c = edit(s)
         set_top(c, 0, K.coin)
         s = settle(c.apply_action(A.PICK_LEFT))  # a single coin builds stage 2 (2 identical) again
-        assert s.stages[0] == 2 and s.cards[0][K.coin] == 0 and s.econ_used
+        assert s.num_stages(0) == 2 and s.cards[0][K.coin] == 0 and s.econ_used
 
     def test_several_stages_in_one_turn(self, base):
         s = check(giza_with(base, 0, [K.wood, K.stone, K.clay, K.clay]))
@@ -685,31 +716,31 @@ class TestConstruction:
         s = s.apply_action(A.PAY_BASE + 0)
         assert s.dkind == D_PAY and list(s.legal_actions()) == [A.PAY_BASE + 1, A.PAY_BASE + 2]
         s = s.apply_action(A.PAY_BASE + 1)  # stage 1 with wood + stone, then clay x2 builds stage 2 (2 identical) at once
-        assert s.stages[0] == 2 and sum(s.cards[0]) == 0 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 2 and sum(s.cards[0]) == 0 and is_main_pick_of(s, 1)
         assert s.score_of(0) == WONDERS[W.Giza].stages[0].vp + WONDERS[W.Giza].stages[1].vp
 
     def test_build_triggered_by_a_taken_card(self, base):
         c = edit(base)
         give(c, 0, K.wood)
         s = take_card(c, K.coin)  # wood + coin is the only payment: built at once, no decision
-        assert s.stages[0] == 1 and s.cards[0][K.wood] == 0 and s.cards[0][K.coin] == 0 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 1 and s.cards[0][K.wood] == 0 and s.cards[0][K.coin] == 0 and is_main_pick_of(s, 1)
         assert s.discard[K.wood] == 1 and s.discard[K.coin] == 1
         c = edit(base)
         give_many(c, 0, [K.wood, K.stone])
         s = take_card(c, K.clay)  # three greys for "2 different": the payment choice is exposed at once
-        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx == ()
+        assert s.to_move() == 0 and s.dkind == D_PAY and s.dctx[1] == ()
         s, _ = pay_through(s)
-        assert s.stages[0] == 1 and sum(s.cards[0]) == 1 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 1 and sum(s.cards[0]) == 1 and is_main_pick_of(s, 1)
 
     def test_no_build_after_the_fifth_stage(self, base):
         c = giza_with(base, 5, [K.stone, K.stone, K.stone, K.stone])
         s = check(c)
-        assert s.stages[0] == 5 and s.cards[0][K.stone] == 4 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 5 and s.cards[0][K.stone] == 4 and is_main_pick_of(s, 1)
 
     def test_stage_vp_bookkeeping(self, base):
         c = edit(base)
         for n in range(6):
-            c.stages[0] = n
+            c.built[0] = first_n(n)
             assert c.score_of(0) == sum(st.vp for st in WONDERS[W.Giza].stages[:n])
 
 
@@ -720,24 +751,101 @@ def wonder_at_stage2(w: int, base_kw: dict = None, rules: RulesConfig = None) ->
     """Player 0 plays Wonder ``w`` with stage 1 built and the 2 identical cards for stage 2."""
     b = first_pick(w, W.Giza, rules=rules, **(base_kw or {}))
     c = edit(b)
-    c.stages[0] = 1
+    c.built[0] = first_n(1)
     give_many(c, 0, [K.stone, K.stone])
     return c
 
 
 class TestStageEffects:
     def test_rhodes_shields_are_permanent(self):
-        s = check(wonder_at_stage2(W.Rhodes))
-        assert s.stages[0] == 2 and s.wonder_shields[0] == 1 and s.shields_of(0) == 1
+        # Rhodes' first shield is on the 2-different foundation (S1), the second on the 3-identical stage (S4)
+        b = first_pick(W.Rhodes, W.Giza)
+        c = edit(b)
+        give_many(c, 0, [K.wood, K.stone])
+        s = check(c)
+        assert s.built[0] == 0b00001 and s.wonder_shields[0] == 1 and s.shields_of(0) == 1
         c = edit(s)
         c.mover, c.battle_pending, c.conflict = 0, True, 3
         s2 = run(c, ("end_turn",))
         assert s2.mil_tokens == [1, 0] and s2.wonder_shields[0] == 1 and s2.shields_of(0) == 1
         c = edit(s)
-        c.stages[0] = 3
+        c.built[0] = first_n(2)  # the 2-identical foundation gives no shield ...
+        c.wonder_shields[0] = 1
         give_many(c, 0, [K.clay, K.clay, K.clay])
-        s3 = check(c, p=0)
-        assert s3.stages[0] == 4 and s3.wonder_shields[0] == 2 and s3.shields_of(0) == 2
+        s3 = check(c, p=0)  # ... S3 (3 different) is not affordable with 3 clay; nothing happens
+        assert s3.built[0] == first_n(2) and s3.wonder_shields[0] == 1
+        c = edit(s)
+        c.built[0] = first_n(3)
+        c.wonder_shields[0] = 1
+        give_many(c, 0, [K.clay, K.clay, K.clay])
+        s4 = check(c, p=0)
+        assert s4.built[0] == first_n(4) and s4.wonder_shields[0] == 2 and s4.shields_of(0) == 2
+
+    def test_rhodes_two_foundations_are_a_choice(self):
+        """Rhodes may start with either foundation; with cards for both the player chooses (D_STAGE)."""
+        b = first_pick(W.Rhodes, W.Giza)
+        c = edit(b)
+        give_many(c, 0, [K.wood, K.wood, K.stone])
+        s = check(c)
+        assert s.to_move() == 0 and s.dkind == D_STAGE and s.dctx == (0, 1)
+        assert list(s.legal_actions()) == [A.STAGE_BASE, A.STAGE_BASE + 1]
+        s1 = settle(s.apply_action(A.STAGE_BASE))       # 2 different: wood + stone
+        assert s1.built[0] == 0b00001 and s1.wonder_shields[0] == 1 and s1.cards[0][K.wood] == 1
+        assert is_main_pick_of(s1, 1)                     # the leftover wood cannot pay the 2-identical stage
+        s2 = settle(s.apply_action(A.STAGE_BASE + 1))   # 2 identical: wood + wood
+        assert s2.built[0] == 0b00010 and s2.wonder_shields[0] == 0 and s2.cards[0][K.stone] == 1
+        assert is_main_pick_of(s2, 1)
+        # with cards for both foundations the mandatory check repeats and both are built in one turn
+        c = edit(b)
+        give_many(c, 0, [K.wood, K.wood, K.stone, K.clay])
+        s = check(c)
+        assert s.dkind == D_STAGE
+        s3 = settle(s.apply_action(A.STAGE_BASE + 1))
+        assert s3.built[0] == 0b00011 and s3.num_stages(0) == 2 and s3.wonder_shields[0] == 1 and sum(s3.cards[0]) == 0
+
+    def test_stage_prerequisites_gate_construction(self):
+        """Rhodes S3 needs both foundations; Babylon may build its 4-different stage before its 3-identical one;
+        Ephesus opens three stages after its foundation; Olympia's S4 needs both S2 and S3."""
+        b = first_pick(W.Rhodes, W.Giza)
+        c = edit(b)
+        c.built[0] = 0b00001
+        give_many(c, 0, [K.wood, K.stone, K.clay])  # would pay S3 (3 different) but S2 is not built
+        s = check(c)
+        assert s.built[0] == 0b00001 and is_main_pick_of(s, 1)
+        c = edit(b)
+        c.built[0] = 0b00011
+        give_many(c, 0, [K.wood, K.stone, K.clay])
+        s = check(c)
+        assert s.built[0] == 0b00111 and s.score_of(0) == 4 + 4 + 5
+        # Babylon: S1..S3 built, 4 different cards -> S5 is available and built (S4 is not affordable)
+        b = first_pick(W.Babylon, W.Giza)
+        c = edit(b)
+        c.built[0] = 0b00111
+        give_many(c, 0, [K.wood, K.stone, K.clay, K.glass])
+        s = check(c)
+        assert s.built[0] == 0b10111 and not s.is_terminal() and s.score_of(0) == 3 + 0 + 5 + 7
+        # Ephesus: after S1 three stages are available; 3 identical cards build S4 (effect: central card)
+        b = first_pick(W.Ephesus, W.Giza)
+        c = edit(b)
+        c.built[0] = 0b00001
+        assert c.available_stages(0) == (1, 2, 3)
+        give_many(c, 0, [K.papyrus, K.papyrus, K.papyrus])
+        s = check(c)
+        assert s.dkind == D_STAGE and s.dctx == (1, 3)  # 2 identical (S2) or 3 identical (S4)
+        s = settle(s.apply_action(A.STAGE_BASE + 3))
+        assert (s.built[0] >> 3) & 1 and s.cards[0][K.papyrus] == 0
+        # Olympia: S4 (3 identical, effect) requires S2 and S3
+        b = first_pick(W.Olympia, W.Giza)
+        c = edit(b)
+        c.built[0] = 0b00011
+        give_many(c, 0, [K.stone, K.stone, K.stone])
+        s = check(c)
+        assert s.built[0] == 0b00011 and is_main_pick_of(s, 1)
+        c = edit(b)
+        c.built[0] = 0b00111
+        give_many(c, 0, [K.stone, K.stone, K.stone])
+        s = check(c)
+        assert s.built[0] == 0b01111 and s.score_of(0) == 3 + 2 + 5 + 5
 
     def test_babylon_stage_grants_a_token_choice(self):
         s = check(wonder_at_stage2(W.Babylon))
@@ -761,7 +869,7 @@ class TestStageEffects:
         c = wonder_at_stage2(W.Babylon)
         exhaust_tokens(c)
         s = check(c)
-        assert s.stages[0] == 2 and sum(s.tokens[0]) == 0 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 2 and sum(s.tokens[0]) == 0 and is_main_pick_of(s, 1)
 
     def test_alexandria_picks_from_any_deck(self):
         s = check(wonder_at_stage2(W.Alexandria))
@@ -780,10 +888,11 @@ class TestStageEffects:
         assert is_main_pick_of(s, 1) and sum(s.cards[0]) == 0
 
     def test_ephesus_draws_the_central_card(self):
-        c = edit(first_pick(W.Ephesus, W.Giza))  # stage 1: 2 different, central card
-        give_many(c, 0, [K.wood, K.stone])
+        c = edit(first_pick(W.Ephesus, W.Giza))  # S1 built; S2 (2 identical) draws the central card
+        c.built[0] = first_n(1)
+        give_many(c, 0, [K.stone, K.stone])
         s, _ = pay_through(check(c))
-        assert s.stages[0] == 1
+        assert s.num_stages(0) == 2
         assert s.is_chance() and s.ckind == C_DRAW_CENTRAL and s.cctx == "ephesus"
         before = s.deck_size[CENTRAL]
         s = s.apply_chance(K.civ3)
@@ -795,12 +904,12 @@ class TestStageEffects:
         give_many(c, 0, [K.wood, K.stone], frm=0)
         drain_deck(c, CENTRAL)
         s, _ = pay_through(check(c))
-        assert s.stages[0] == 1 and sum(s.cards[0]) == 0 and is_main_pick_of(s, 1)
+        assert s.num_stages(0) == 1 and sum(s.cards[0]) == 0 and is_main_pick_of(s, 1)
 
     def test_olympia_takes_both_wonder_deck_tops(self):
         c = wonder_at_stage2(W.Olympia, {"tops": (K.clay, K.papyrus)})
         s = check(c)
-        assert s.stages[0] == 2
+        assert s.num_stages(0) == 2
         assert s.is_chance() and s.ckind == C_REVEAL and s.cctx == 0  # own deck first
         s = s.apply_chance(K.glass)
         assert s.cards[0][K.clay] == 1
@@ -819,21 +928,21 @@ class TestStageEffects:
         drain_deck(c2, 0)
         drain_deck(c2, 1)
         s2 = check(c2)
-        assert s2.stages[0] == 2 and sum(s2.cards[0]) == 0
+        assert s2.num_stages(0) == 2 and sum(s2.cards[0]) == 0
 
     def test_olympia_extra_cards_can_trigger_a_build(self):
         c = wonder_at_stage2(W.Olympia, {"tops": (K.wood, K.clay)})
         give(c, 0, K.glass)  # stage 3 needs 3 different: glass + wood + clay from the Olympia cards
         s = settle(check(c))
         s, _ = pay_through(s)
-        assert s.stages[0] == 3
+        assert s.num_stages(0) == 3
 
     # ---- Halicarnassus ------------------------------------------------------------
     def hali(self, deck0_top, deck0_unseen, rules=None) -> GameState:
         c = wonder_at_stage2(W.Halicarnassus, rules=rules)
         set_deck(c, 0, deck0_top, deck0_unseen)
         s = check(c)
-        assert s.stages[0] == 2
+        assert s.num_stages(0) == 2
         return s
 
     def test_halicarnassus_full_flow(self):
@@ -907,7 +1016,7 @@ class TestStageEffects:
         drain_deck(c, 1)
         s = check(c)
         # no effect; P1's main pick has a single option (the center) and is auto-resolved into a draw
-        assert s.stages[0] == 2 and s.mover == 1 and s.is_chance() and s.ckind == C_DRAW_CENTRAL
+        assert s.num_stages(0) == 2 and s.mover == 1 and s.is_chance() and s.ckind == C_DRAW_CENTRAL
 
     def test_halicarnassus_optional_rule(self):
         s = self.hali(K.clay, [K.papyrus], rules=RulesConfig(wonder_effect_optional=True))
@@ -1057,22 +1166,22 @@ class TestScience:
     def test_token_taken_by_science_can_change_the_build_check(self, base):
         """Engineering acquired in the same turn immediately unlocks a build (check re-run)."""
         c = with_science(base, [K.tablet, K.tablet, K.wood, K.stone])
-        c.stages[0] = 1  # 2 identical: not affordable with wood + stone ...
+        c.built[0] = first_n(1)  # 2 identical: not affordable with wood + stone ...
         set_faceup(c, [T.Engineering, T.Strategy, T.Decor])
         s = check(c)
-        assert s.dkind == D_TOKEN and s.stages[0] == 1
+        assert s.dkind == D_TOKEN and s.num_stages(0) == 1
         s, _ = pay_through(s.apply_action(A.TOKEN_BASE + T.Engineering).apply_chance(T.Tactics))
-        assert s.stages[0] == 2  # ... until Engineering arrives
+        assert s.num_stages(0) == 2  # ... until Engineering arrives
 
     def test_player_may_take_a_token_before_building(self, base):
         c = with_science(base, [K.tablet, K.tablet, K.wood, K.wood])
-        c.stages[0] = 1
+        c.built[0] = first_n(1)
         set_faceup(c, [T.Architecture, T.Strategy, T.Decor])
         s = check(c)
         # rulebook: science first -> Architecture -> build -> extra pick offered this turn
-        assert s.dkind == D_TOKEN and s.stages[0] == 1
+        assert s.dkind == D_TOKEN and s.num_stages(0) == 1
         s = s.apply_action(A.TOKEN_BASE + T.Architecture).apply_chance(T.Tactics)
-        assert s.stages[0] == 2 and is_pick(s, f"token:{T.Architecture}", 0)
+        assert s.num_stages(0) == 2 and is_pick(s, f"token:{T.Architecture}", 0)
 
 
 # =====================================================================================
@@ -1120,7 +1229,7 @@ class TestProgressTokens:
         assert s.is_chance() and s.ckind == C_REVEAL and s.cctx == 1
         s = s.apply_chance(K.clay)
         # wood + stone is exactly the "2 different" first stage: the mandatory build is auto-resolved
-        assert s.stages[0] == 1 and s.cards[0][K.wood] == 0 and s.cards[0][K.stone] == 0
+        assert s.num_stages(0) == 1 and s.cards[0][K.wood] == 0 and s.cards[0][K.stone] == 0
         assert s.discard[K.wood] == 1 and s.discard[K.stone] == 1
         assert is_pick(s, f"token:{T.Architecture}", 0)  # offered by the build, still this turn
         assert (s.tokens_used >> T.Urbanism) & 1 and not (s.tokens_used >> T.Architecture) & 1
@@ -1128,7 +1237,7 @@ class TestProgressTokens:
 
     def test_extra_pick_from_own_deck_with_a_second_trigger_is_not_repeated(self, base):
         c = edit(base)
-        c.stages[0] = 1  # stage 2 needs 2 identical: wood + clay will not build
+        c.built[0] = first_n(1)  # stage 2 needs 2 identical: wood + clay will not build
         give_token(c, 0, T.Urbanism)
         set_top(c, 0, K.clay)  # an Urbanism card on top of the own deck
         s = take_card(c, K.wood)
@@ -1181,11 +1290,11 @@ class TestProgressTokens:
     def test_architecture_once_per_turn_but_declining_does_not_consume_it(self, base):
         c = giza_with(base, 0, [K.wood, K.stone, K.clay, K.clay], [T.Architecture])
         s = check(c).apply_action(A.PAY_BASE + 0).apply_action(A.PAY_BASE + 1)
-        assert s.stages[0] == 1 and is_pick(s, f"token:{T.Architecture}", 0)
+        assert s.num_stages(0) == 1 and is_pick(s, f"token:{T.Architecture}", 0)
         declined = s.apply_action(A.SKIP)  # stage 2 (clay x2) follows: offered again
-        assert declined.stages[0] == 2 and is_pick(declined, f"token:{T.Architecture}", 0)
+        assert declined.num_stages(0) == 2 and is_pick(declined, f"token:{T.Architecture}", 0)
         used = s.apply_action(A.PICK_CENTER).apply_chance(K.civ3)
-        assert used.stages[0] == 2 and is_main_pick_of(used, 1)  # not offered a second time
+        assert used.num_stages(0) == 2 and is_main_pick_of(used, 1)  # not offered a second time
 
     def test_tactics_adds_two_shields(self, base):
         c = edit(base)
@@ -1212,9 +1321,9 @@ class TestProgressTokens:
         assert c.score_of(0) == 2 * 2
         give_token(c, 0, T.Decor)  # 3 tokens
         assert c.score_of(0) == 2 * 3 + 4
-        c.stages[0] = 5
+        c.built[0] = first_n(5)
         assert c.score_of(0) == 30 + 2 * 3 + 6
-        c.stages[0] = 0
+        c.built[0] = first_n(0)
         give_token(c, 0, T.Politics)  # 4 tokens
         assert c.score_of(0) == 2 * 4 + 4
         give_many(c, 0, [K.civ2cat, K.civ2cat, K.civ3])
@@ -1330,10 +1439,11 @@ class TestMilitary:
 
     def test_battle_resolves_after_the_rest_of_the_turn(self):
         """A stage built later in the same turn (Rhodes shield) counts in the battle."""
-        c = wonder_at_stage2(W.Rhodes)
+        c = edit(first_pick(W.Rhodes, W.Giza))
+        give_many(c, 0, [K.wood, K.stone])  # Rhodes S1 (2 different) gives the shield
         c.conflict = 2
         s = take_card(c, K.shield_h1)  # triggers the battle, then the mandatory build gives +1 shield
-        assert s.stages[0] == 2 and s.mil_tokens == [2, 0]  # 2 shields vs 0 -> two tokens
+        assert s.num_stages(0) == 1 and s.mil_tokens == [2, 0]  # 2 shields vs 0 -> two tokens
         assert s.cards[0][K.shield_h1] == 0 and s.wonder_shields[0] == 1
 
     def test_battle_triggered_by_the_opponent_still_compares_both(self, base):
@@ -1362,13 +1472,13 @@ class TestGameEnd:
         s = check(c)
         assert s.to_move() == 0 and s.dkind == D_PAY and not s.is_terminal()
         s, taken = pay_through(s)
-        assert len(taken) == 4 and s.stages[0] == 5  # wood, stone, clay, papyrus (first option each time)
+        assert len(taken) == 4 and s.num_stages(0) == 5  # wood, stone, clay, papyrus (first option each time)
         return s
 
     def test_fifth_stage_ends_the_game_at_the_end_of_the_turn(self, base):
         s = self.final_stage(base)
         assert s.is_terminal() and s.game_over and s.wonder_done and s.to_move() == -2
-        assert s.stages[0] == 5 and s.scores() == (30, 0) and s.returns() == (1.0, -1.0)
+        assert s.num_stages(0) == 5 and s.scores() == (30, 0) and s.returns() == (1.0, -1.0)
         assert s.score_diff() == 30 and s.legal_actions() == () and s.chance_outcomes() == ()
         assert s.mover == 0  # the opponent gets no further turn
         with pytest.raises(ValueError):
@@ -1391,7 +1501,7 @@ class TestGameEnd:
             give(c, 0, K.tablet)
             set_top(c, 0, K.tablet)
         s = self.final_stage(base, extra)
-        assert not s.is_terminal() and s.stages[0] == 5 and is_pick(s, f"token:{T.Architecture}", 0)
+        assert not s.is_terminal() and s.num_stages(0) == 5 and is_pick(s, f"token:{T.Architecture}", 0)
         s = settle(s.apply_action(A.PICK_LEFT))  # the tablet completes a pair
         assert not s.is_terminal() and s.dkind == D_TOKEN and s.dctx == "science"
         s = settle(s.apply_action(A.TOKEN_BASE + T.Decor))
@@ -1402,9 +1512,9 @@ class TestGameEnd:
         may apply to that build), also in the turn that completes the Wonder."""
         c = giza_with(base, 4, [K.wood, K.stone, K.clay, K.papyrus, K.tablet, K.tablet])
         s = check(c)
-        assert s.to_move() == 0 and s.dkind == D_TOKEN and s.dctx == "science" and s.stages[0] == 4
+        assert s.to_move() == 0 and s.dkind == D_TOKEN and s.dctx == "science" and s.num_stages(0) == 4
         s = settle(s.apply_action(A.TOKEN_BASE + T.Decor))  # then the (exact) payment is auto-resolved
-        assert s.is_terminal() and s.stages[0] == 5 and s.scores() == (36, 0)
+        assert s.is_terminal() and s.num_stages(0) == 5 and s.scores() == (36, 0)
 
     def test_loser_completing_the_wonder_still_ends_the_game(self, base):
         s = self.final_stage(base, lambda c: c.mil_tokens.__setitem__(1, 11))
@@ -1441,7 +1551,7 @@ class TestGameEnd:
             c = edit(base if rules is None else first_pick(rules=rules))
             for d in range(3):
                 drain_deck(c, d)
-            c.stages[0] = 1  # Giza stage 1: 4 VP
+            c.built[0] = first_n(1)  # Giza stage 1: 4 VP
             c.cards[1][K.civ2cat], c.discard[K.civ2cat] = 1, c.discard[K.civ2cat] - 1
             c.cat = 1  # 2 + 2 = 4 VP
             return c
@@ -1451,14 +1561,14 @@ class TestGameEnd:
         s = run(ended(RulesConfig(tiebreak_stages=False)), ("turn_start",))
         assert s.scores() == (4, 4) and s.returns() == (0.0, 0.0)
         c = ended()
-        c.stages = [0, 0]
+        c.built = [0, 0]
         c.cards[0][K.civ3], c.discard[K.civ3] = 1, c.discard[K.civ3] - 1
         c.cards[1][K.civ2cat] = 0
         c.discard[K.civ2cat] += 1
         c.cards[1][K.civ3], c.discard[K.civ3] = 1, c.discard[K.civ3] - 1
         c.cat = -1
         s = run(c, ("turn_start",))
-        assert s.scores() == (3, 3) and s.stages == [0, 0] and s.returns() == (0.0, 0.0)
+        assert s.scores() == (3, 3) and s.built == [0, 0] and s.returns() == (0.0, 0.0)
 
     def test_returns_are_zero_before_the_end(self, base):
         c = giza_with(base, 4, [K.civ3])

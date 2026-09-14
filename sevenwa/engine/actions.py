@@ -18,7 +18,8 @@ class Actions:
     TOKEN_BASE = 15    # TOKEN_BASE + token type id: take that face-up Progress token
     TOKEN_BLIND = TOKEN_BASE + NUM_TOKEN_TYPES  # take the top (face-down) token of the stack
     HALI_BASE = TOKEN_BLIND + 1                 # HALI_BASE + kind id: keep that card (Halicarnassus)
-    NUM = HALI_BASE + NUM_KINDS
+    STAGE_BASE = HALI_BASE + NUM_KINDS          # STAGE_BASE + stage index (0..4): construct that Wonder stage
+    NUM = STAGE_BASE + 5
 
     @staticmethod
     def name(a: int) -> str:
@@ -45,6 +46,8 @@ class Actions:
             return f"token_{TOKENS[a - A.TOKEN_BASE].name}"
         if a == A.TOKEN_BLIND:
             return "token_blind"
-        if A.HALI_BASE <= a < A.NUM:
+        if A.HALI_BASE <= a < A.STAGE_BASE:
             return f"keep_{KINDS[a - A.HALI_BASE].name}"
+        if A.STAGE_BASE <= a < A.NUM:
+            return f"build_stage_{a - A.STAGE_BASE + 1}"
         return f"?{a}"

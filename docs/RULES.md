@@ -41,7 +41,7 @@ Section §14 lists engine defects and discrepancies found while writing this doc
 | tableau | `state.cards[p]` — the cards in front of player `p` (count vector). |
 | unseen / top | A deck is `(deck_top[d], unseen[d])`: the visible top kind (`-1` = hidden/none) plus the multiset of cards below it.  `deck_size[d] = (1 if deck_top[d] >= 0 else 0) + sum(unseen[d])`; the central deck's top is normally hidden and counted inside `unseen`, and is set only after a Cat peek. |
 | node | A state is a **decision node** (`to_move()` ∈ {0,1}, `legal_actions()` non-empty), a **chance node** (`to_move() == CHANCE == -1`, `chance_outcomes()` is a distribution) or **terminal** (`to_move() == -2`). |
-| stage | `stages[p]` = number of constructed stages (0..5); the *next* stage to build is `WONDERS[wonder[p]].stages[stages[p]]`. |
+| stage | `built[p]` = bitmask of constructed stages (bit `i` = stage `i` in the fixed cost order S1..S5 = 2≠, 2=, 3≠, 3=, 4≠); `num_stages(p)` = its popcount; `available_stages(p)` = the unbuilt stages whose printed prerequisites are all built (`Wonder.available(built)`, §5.2).  Construction order is a *graph*, not a ladder. |
 
 Card kinds (`data/decks.json`, `cards.py`):
 
@@ -62,7 +62,7 @@ Card kinds (`data/decks.json`, `cards.py`):
 | 12 | `shield_h1` | red | 1 shield, 1 horn |
 | 13 | `shield_h2` | red | 1 shield, 2 horns |
 
-Global action space (`actions.py`, `Actions.NUM = 44`; the policy head has this width and
+Global action space (`actions.py`, `Actions.NUM = 49`; the policy head has this width and
 illegal actions are masked):
 
 | id | action | used at |
@@ -79,6 +79,7 @@ illegal actions are masked):
 | 15–28 | `TOKEN_BASE + t` — take face-up Progress token type `t` | token decisions |
 | 29 | `TOKEN_BLIND` — take the top (face-down) token of the stack | token decisions |
 | 30–43 | `HALI_BASE + k` — keep the revealed card of kind `k` | Halicarnassus decisions |
+| 44–48 | `STAGE_BASE + i` — construct stage `i` (offered only when several stages are affordable at once) | stage decisions |
 
 ---
 
@@ -89,8 +90,8 @@ illegal actions are masked):
 | Component | Count in a 2-player game | Engine |
 |---|---|---|
 | Wonders | 2 of the 7 (Giza, Rhodes, Alexandria, Halicarnassus, Olympia, Ephesus, Babylon — ids 0..6 in `wonders.json` order), 5 stages each | `state.wonder = (w0, w1)`; `Environment(wonders=None)` draws 2 *distinct* Wonders uniformly. **CONFIRMED** (7 Wonders × 5 stages). |
-| Wonder decks | 1 per Wonder, 25 cards, **face up** | decks 0 and 1; composition from `decks.json` (§1.2). Deck sizes **CONFIRMED**; composition partly confirmed (coins, Giza's horned cards, Alexandria's deviations), the rest **ASSUMED**. |
-| Central (common) deck | 60 cards, **face down** | deck 2. Size **CONFIRMED**, composition **ASSUMED** (only game-wide proportions constrain it). |
+| Wonder decks | 1 per Wonder, 25 cards, **face up** | decks 0 and 1; composition from `decks.json` (§1.2). Sizes and every per-deck count **CONFIRMED** (physical card table, 2026-09-14). |
+| Central (common) deck | 60 cards, **face down** | deck 2. Size and composition **CONFIRMED** (physical card table, 2026-09-14). |
 | Discard pile | face up next to the central deck; never reshuffled | `state.discard` (count vector, inert). **CONFIRMED**. |
 | Progress tokens | 15: 14 types, Culture ×2; shuffled face-down stack, top **3** face up | `prog_unseen` (per-type counts still in the stack), `prog_stack` (its size), `faceup` (list of type ids). `RulesConfig.faceup_progress_tokens = 3`. **CONFIRMED**. |
 | Conflict tokens | **3** Peace-side up (the other 3 of the 6 are removed) | `conflict` = number flipped to the Battle side (0..3); `RulesConfig.conflict_tokens = 3`. Table 3/3/4/5/6/6 for 2..7 players: **CONFIRMED** by DE (brettspielblog.ch / siegpunktsammler.de / hall9000.de: "3 Konfliktmarker bei 2-3 Spielern, 4 bei 4, 5 bei 5, 6 bei 6-7") + IT (Balena Ludens: "3 fino a 3 giocatori") sources; the EN mirrors only say "consult the table", which is an image. |
@@ -109,74 +110,40 @@ cards[0][k] + cards[1][k] + Σ_d unseen[d][k] + Σ_d [deck_top[d] == k] + discar
 
 (`tests/conftest.py::assert_invariants` checks it over random games.)
 
-### 1.2 Deck compositions (`data/decks.json`) — sizes and a few counts CONFIRMED, the rest **ASSUMED**
+### 1.2 Deck compositions (`data/decks.json`) — **CONFIRMED** (physical card table, 2026-09-14)
 
-Provenance after the second research pass (2026-09-13, `research2/decks.md`; items D1–D17 in
-`research2/PROPOSAL.md`; the `_status` and `wonder_deck_overrides._note` strings in the JSON say
-the same):
+The exact per-deck distribution was supplied by the user from the printed card-distribution
+table on 2026-09-14 and replaces the placeholders of the two search-based research passes (which
+had confirmed only the deck sizes, the coin counts of the standard deck and Alexandria, and Giza's
+horned cards; see §11).  Every cell below is now **CONFIRMED**.
 
-* **CONFIRMED** — 235 cards = 7 × 25 Wonder decks + 60 central (BGG thread 2726508, BGA game
-  panel, retailer component lists).  The 11 non-red kinds (rulebook mirrors, BGA Gamehelp).  Every
-  red card is exactly **1 shield with 0, 1 or 2 horns** (Board Game Family: "Every Military card
-  holds a shield … Some Military cards also feature a horn or two"; FR reviews: "les cartes rouges
-  ont un bouclier chacune"; BGA: "shields and 0–2 horns"; no 2-shield card is reported anywhere).
-  The standard Wonder deck holds **3 coins** and Alexandria **4** — two independent sources:
-  BoostYourPlay "In the Alexandria deck, there are one more Gold and Gear Science cards than
-  normal, but 1 fewer Glass and 1-Horn Military cards" and the description of BGG file 233664
-  "Alexandria contains 4 gold and 1/6 you will discover a gold for your opponent".  Each Wonder
-  deck differs from the "Standard" configuration by "about 2-3 cards … no real extremes"
-  (BoostYourPlay + BGG file 233664).
-* **SINGLE** (BoostYourPlay strategy guide unless noted) — Alexandria +1 gear, −1 glass, −1
-  one-horn (hence standard glass ≥ 2, gear ≥ 1, one-horn ≥ 1); **Giza "has 2 1-horned Military
-  cards and 0 2-horned Military cards"** (applied on 2026-09-13: the earlier placeholder gave Giza
-  the standard 2 / 1); game-wide "over 1/3 of the cards … are gray resource cards, and about 12 %
-  are Gold cards.  Science, Military, and Civilian cards are close to even at around 17 % each";
-  "more Gold+Stone cards than Glass+Papyrus or Wood+Clay"; BGA game panel: "over 11 % of the cards
-  let you take control of the cat pawn" (≥ 26 cat cards).
-* **ASSUMED** — everything else: the standard wood / stone / clay / papyrus, hornless-red, tablet
-  and compass counts; the exact glass, gear and two-horn counts (only bounded, two-horn ≥ 1 is a
-  mere inference from Giza being "the deck to avoid"); the blue split; which card replaces Giza's
-  missing two-horn card (a hornless red — the minimal change: Giza keeps 4 red cards and 4 shields
-  and the game-wide type proportions are unchanged); whether Giza deviates in any other card; every
-  deviation of Babylon / Ephesus / Halicarnassus / Olympia / Rhodes (placeholders rotating the
-  favoured science symbol; Rhodes = standard); the whole central deck.  The blue split **1 × civ3 /
-  3 × civ2cat** per Wonder deck (2026-09-13) is a re-fit of the placeholder so that 7 × 3 + 6 = **27
-  cat cards = 11.5 %** of 235 satisfies the BGA "over 11 %" constraint (the earlier 2 / 2 split gave
-  20 = 8.5 %, violating it); the split itself is unverified.
-
-The per-deck table, regenerated from the JSON (bold = differs from the standard deck):
-
-| kind | standard Wonder deck | Alexandria | Babylon | Ephesus | Giza | Halicarnassus | Olympia | Rhodes | central |
+| kind | Ephesus | Giza | Alexandria | Rhodes | Babylon | Olympia | Halicarnassus | central | all |
 |---|---|---|---|---|---|---|---|---|---|
-| wood | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 3 |
-| stone | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 4 |
-| clay | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 3 |
-| papyrus | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 3 |
-| glass | 2 | **1** | 2 | 2 | 2 | 2 | 2 | 2 | 3 |
-| coin | 3 | **4** | 3 | 3 | 3 | 3 | 3 | 3 | 8 |
-| civ3 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 6 |
-| civ2cat | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 3 | 6 |
-| tablet | 2 | 2 | **1** | **1** | 2 | **1** | **1** | 2 | 4 |
-| gear | 1 | **2** | **2** | 1 | 1 | 1 | **2** | 1 | 4 |
-| compass | 1 | 1 | 1 | **2** | 1 | **2** | 1 | 1 | 4 |
-| shield | 1 | 1 | 1 | 1 | **2** | 1 | 1 | 1 | 3 |
-| shield_h1 | 2 | **1** | 2 | 2 | 2 | 2 | 2 | 2 | 6 |
-| shield_h2 | 1 | 1 | 1 | 1 | **0** | 1 | 1 | 1 | 3 |
-| **total** | 25 | 25 | 25 | 25 | 25 | 25 | 25 | 25 | 60 |
+| wood | 2 | 2 | 2 | 2 | 2 | **1** | 2 | 4 | 17 |
+| stone | 2 | 2 | 2 | 2 | **1** | 2 | 2 | 4 | 17 |
+| clay | 2 | **1** | 2 | 2 | 2 | 2 | 2 | 4 | 17 |
+| papyrus | 2 | 2 | 2 | 2 | 2 | 2 | **1** | 4 | 17 |
+| glass | 2 | 2 | **1** | 2 | 2 | 2 | 2 | 4 | 17 |
+| coin | 3 | 3 | **4** | **2** | 3 | 3 | 3 | 6 | 27 |
+| civ2cat (2 VP + Cat) | 2 | **3** | 2 | 2 | 2 | **3** | 2 | 8 | 24 |
+| civ3 (3 VP) | **1** | 2 | 2 | 2 | 2 | **1** | 2 | 4 | 16 |
+| shield (0 horns) | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 4 | 18 |
+| shield_h1 (1 horn) | **1** | 2 | **1** | 2 | **1** | 2 | 2 | 4 | 15 |
+| shield_h2 (2 horns) | 1 | **0** | 1 | 1 | 1 | 1 | 1 | 2 | 8 |
+| compass | **2** | **2** | 1 | 1 | **2** | 1 | 1 | 4 | 14 |
+| gear | 1 | 1 | **2** | **2** | **2** | 1 | 1 | 4 | 14 |
+| tablet | **2** | 1 | 1 | 1 | 1 | **2** | **2** | 4 | 14 |
+| **total** | 25 | 25 | 25 | 25 | 25 | 25 | 25 | 60 | **235** |
 
-Confidence per cell: `coin` (standard 3, Alexandria 4) CONFIRMED; Alexandria's `glass`, `gear`,
-`shield_h1` and Giza's `shield_h1` / `shield_h2` SINGLE; every other cell ASSUMED (the standard
-`glass` ≥ 2, `gear` ≥ 1 and `shield_h1` ≥ 1 are lower-bounded only).  Game-wide, all 235 cards:
-grey 85 (36.2 %), yellow 30 (12.8 %), blue 40 (17.0 %), green 41 (17.4 %), red 39 (16.6 %); cat
-cards 27 (11.5 %); gold + stone 48 > wood + clay 34 > glass + papyrus 33 — every SINGLE aggregate
-constraint above is satisfied.  The full table exists but was unreachable offline: BGG file 233664
-"7 Wonders Architets cards distribution"
-(https://boardgamegeek.com/filepage/233664/7-wonders-architets-cards-distribution), most likely
-the same table as BGG image 6620199 (https://boardgamegeek.com/image/6620199/7-wonders-architects),
-mirrored at https://bgmanual.com/boardgames/1092/7-wonders-architects — see §11.3.
+Bold = differs from the modal value of that kind (the `standard_wonder_deck` in the JSON: 2 of
+each resource, 3 coins, 2 + 2 blue, 2 / 2 / 1 red, 1 of each symbol = 25).  Game-wide: grey 85
+(36.2 %), yellow 27 (11.5 %), blue 40 (17.0 %), green 42 (17.9 %), red 41 (17.4 %); cat cards 24
+(10.2 %); 14 of each science symbol.  Giza is the only deck without a two-horn card; Rhodes the
+only one with 2 coins; Alexandria has 4.
 
 `cards.wonder_deck_counts(name)` = `standard_wonder_deck` updated with `wonder_deck_overrides[name]`
 (keys starting with `_` are comments); `central_deck_counts()` = `central_deck`.
+`tests/test_engine.py::TestData::test_deck_compositions` pins the sums.
 
 ### 1.3 Setup sequence as executed by the engine
 
@@ -277,8 +244,9 @@ Because `_push` prepends, the concrete order after a card is placed is:
 and after the main pick the queue is just `(("end_turn",),)` — everything else is generated by
 the handlers.  §13 shows a real trace.
 
-Decision kinds: `D_PICK`, `D_PAY`, `D_SCIENCE`, `D_TOKEN`, `D_HALI_DECK`, `D_HALI_CHOOSE`
-(`state.dkind`, context in `state.dctx`).  Chance kinds: `C_REVEAL` (new top of a Wonder deck),
+Decision kinds: `D_PICK`, `D_PAY`, `D_SCIENCE`, `D_TOKEN`, `D_HALI_DECK`, `D_HALI_CHOOSE`, `D_STAGE`
+(`state.dkind`, context in `state.dctx`; for `D_PAY` the context is `(stage index, codes paid so far)`,
+for `D_STAGE` the tuple of affordable stage indexes).  Chance kinds: `C_REVEAL` (new top of a Wonder deck),
 `C_DRAW_CENTRAL` (blind central draw), `C_PEEK` (Cat peek), `C_TOKEN_REVEAL` (face-up refill),
 `C_TOKEN_BLIND` (blind token), `C_HALI_REVEAL` (Halicarnassus reveal).  Every chance distribution
 is "one item drawn uniformly from the relevant unseen multiset" (§2.5).
@@ -337,8 +305,15 @@ and blue → kept (FR Wikipedia summary, **CONFIRMED**).  Leftover grey/yellow/g
 
 ### 4.1 Rules (**CONFIRMED**)
 
-* Each Wonder has 5 stages built strictly bottom to top; the next stage is
-  `stages[stages[p]]`.
+* Each Wonder has 5 stages.  Which stages may be constructed next is printed on the tray as a
+  dependency diagram (**CONFIRMED**, user-supplied board data, 2026-09-14): Alexandria and Giza
+  are linear ladders; Rhodes may begin with either foundation (`{S1,S2} → S3 → S4 → S5`);
+  Babylon `S1 → S2 → S3 → {S4,S5}`; Ephesus `S1 → {S2,S3,S4} → S5`; Halicarnassus
+  `S1 → S2 → {S3,S4} → S5`; Olympia `S1 → {S2,S3} → S4 → S5`.  The engine keeps the bitmask
+  `built[p]`; `available_stages(p)` are the unbuilt stages whose prerequisites are all built.
+* When more than one available stage is affordable the player chooses which one to construct
+  (decision `D_STAGE`, actions `STAGE_BASE + i`; a single affordable stage is auto-resolved);
+  the mandatory check then repeats, so several stages may be built in one turn.
 * Each stage shows a cost: **2, 3 or 4 resources**, either all **identical** ("=" icon) or all
   **different** ("≠" icon).
 * "If you have the Resources needed to construct a Stage of your Wonder, you **must** construct it
@@ -413,7 +388,7 @@ At each step the legal actions are exactly the cards whose use still leaves the 
   6, the doubled coin is always the last card of a payment.
 
 When the accumulated value reaches `cost`, `_build` runs: the chosen cards move to `discard`,
-`stages[p] += 1`, `econ_used = True` if a doubled coin was used (cleared again at once when
+`built[p] |= 1 << i` for the chosen stage `i`, `econ_used = True` if a doubled coin was used (cleared again at once when
 `economy_once_per_build = True`), `wonder_done = True` if the 5th stage was built, then
 `("check",)`, the Architecture pick (if held and active) and the stage effect are queued (effect
 first, Architecture second, check last).  Steps with a single legal action are auto-resolved, so
@@ -451,51 +426,53 @@ the science / construction check (§2.3).  With `wonder_effect_optional = True` 
 Ephesus picks and the Halicarnassus deck choice gain a `SKIP` action (BGG thread 2835875 "Is it
 mandatory to use a Wonder's effect?" — answer not retrievable; default **mandatory**).
 
-### 5.2 Per-stage data currently encoded (`data/wonders.json`)
+### 5.2 Per-stage data (`data/wonders.json`) — **CONFIRMED** (physical boards, 2026-09-14)
 
-> **PROMINENT WARNING.**  For every Wonder the **effect type** and its wording are **CONFIRMED**
-> (rulebook mirrors).  The **number of effect stages** is **CONFIRMED** for Rhodes (2), Babylon (2)
-> and Giza (0) (BGG thread 2943868 + Board Game Family review) and for Ephesus (3: BGG 2943868 +
-> Board Game Family, against one review saying "twice"), but only **SINGLE** for Olympia (2, i.e.
-> 4 cards), Alexandria (2) and Halicarnassus (2).  The **total VP** (30/26/25/24/22/22/20) are
-> **SINGLE-SOURCE**: one post in BGG thread 2943868 "Wonders. Which is the best?" by a 300+-play
-> BGA player, relayed identically in two queries; no contradicting figure was found in 11
-> languages, but the BGA game page prints no totals (the earlier "CONFIRMED (BGG/BGA)" label was
-> wrong).  The **per-stage costs**, the **per-stage VP split** and **which stages carry the
-> effects** are **ASSUMED**: the *set* of costs (2–4 resources, identical or different; "the first
-> stage of most wonders" is 2 different, "the upper levels generally require a set of four") is
-> **CONFIRMED** by FR / DE / IT / JA / EN reviews, but the order 2≠ 2= 3≠ 3= 4≠ used for every
-> Wonder is a placeholder; effects were placed on stages 2 and 4 by analogy with Rhodes (the only
-> Wonder whose effect stages, 2 and 4, have a source — BGG thread 2869259, **SINGLE**), Ephesus's
-> three effects on stages 1, 3, 5, and Olympia's first effect is at least "early" (stage 1 or 2 —
-> BGG 2943868; stage 2 is consistent).  VP splits are monotone placeholders summing to the totals.
-> **Giza may not share the cost pattern**: the official site's marketing copy says "The Pyramid's
-> stable structure allows you to build with fewer matching resource cards", i.e. Giza probably has
-> *fewer* "identical" stages than the others — not encoded.  Verify against the physical trays
-> (rulebook page 6) before trusting any Wonder-specific strength conclusion.
+The seven boards were read from the publisher's component image (Alexandria) and from component
+photographs (the other six) and supplied by the user on 2026-09-14; they replace the assumed cost
+order, VP split and effect placement of the earlier passes.  Two transcription traps the source
+called out: Halicarnassus' 3-different stage is **6** points and Rhodes' first shield belongs to
+its **2-different** foundation, not the 2-identical one; Babylon's 2-identical stage really prints
+**0** VP.
 
-Format of a row: `cost kind / VP [effect]` (`≠` = different, `=` = identical).
+Stages are indexed S1..S5 in a fixed **cost order** — 2 different, 2 identical, 3 different,
+3 identical, 4 different — which is the same for all seven Wonders.  This is *not* the
+construction order: the tray diagrams give a dependency structure (stages inside `{…}` are
+independent; a stage after the braces needs everything inside them).  A simulator that unlocks
+"the next stage in an array" is wrong for five of the seven Wonders.
 
-| id | Wonder | stage 1 | stage 2 | stage 3 | stage 4 | stage 5 | total VP |
-|---|---|---|---|---|---|---|---|
-| 0 | Giza | 2≠ / 4 | 2= / 5 | 3≠ / 6 | 3= / 7 | 4≠ / 8 | **30** |
-| 1 | Rhodes | 2≠ / 3 | 2= / 4 **shield** | 3≠ / 5 | 3= / 6 **shield** | 4≠ / 8 | **26** |
-| 2 | Alexandria | 2≠ / 3 | 2= / 4 **any_deck_card** | 3≠ / 5 | 3= / 6 **any_deck_card** | 4≠ / 7 | **25** |
-| 3 | Halicarnassus | 2≠ / 3 | 2= / 4 **look_5_choose_1** | 3≠ / 5 | 3= / 5 **look_5_choose_1** | 4≠ / 7 | **24** |
-| 4 | Olympia | 2≠ / 3 | 2= / 3 **left_and_right_cards** | 3≠ / 5 | 3= / 5 **left_and_right_cards** | 4≠ / 6 | **22** |
-| 5 | Ephesus | 2≠ / 2 **central_card** | 2= / 4 | 3≠ / 4 **central_card** | 3= / 6 | 4≠ / 6 **central_card** | **22** |
-| 6 | Babylon | 2≠ / 3 | 2= / 3 **progress_token** | 3≠ / 4 | 3= / 4 **progress_token** | 4≠ / 6 | **20** |
+Format of a cell: `VP` (★ = the stage carries the Wonder's effect).
 
-**How to correct `wonders.json`.**  Each Wonder is `{"name", "total_vp", "stages": [5 × {"cost": int,
-"kind": "identical"|"different", "vp": int, "effect": <effect id or omitted for none>}]}`, listed
-bottom stage first.  Edit the `cost`, `kind`, `vp` and `effect` fields of the affected stages; keep
-exactly 5 stages; `effect` must be one of the ids in §5.1 (`wonders.py` asserts this at import).
-`total_vp` is informational (the engine sums the stage VP); keep it in sync.  The order of the
-`wonders` array defines the Wonder ids — do not reorder.  `tests/test_engine.py::TestData::
-test_wonder_stage_tables` pins the totals, the effect type per Wonder, the number of effect stages
-(Ephesus 3, others 2, Giza 0) and Rhodes's effect stages `[1, 3]`; update those expectations
-together with the data if the physical trays differ (e.g. if Ephesus turns out to have 2 effect
-stages).
+| id | Wonder | S1: 2≠ | S2: 2= | S3: 3≠ | S4: 3= | S5: 4≠ | total | construction dependencies |
+|---|---|---|---|---|---|---|---|---|
+| 0 | Giza | 4 | 5 | 6 | 7 | 8 | **30** | S1 → S2 → S3 → S4 → S5 |
+| 1 | Rhodes | 4 ★ | 4 | 5 | 6 ★ | 7 | **26** | {S1, S2} → S3 → S4 → S5 |
+| 2 | Alexandria | 4 | 3 ★ | 6 | 5 ★ | 7 | **25** | S1 → S2 → S3 → S4 → S5 |
+| 3 | Halicarnassus | 3 | 3 ★ | 6 | 5 ★ | 7 | **24** | S1 → S2 → {S3, S4} → S5 |
+| 4 | Olympia | 3 | 2 ★ | 5 | 5 ★ | 7 | **22** | S1 → {S2, S3} → S4 → S5 |
+| 5 | Ephesus | 3 | 3 ★ | 4 ★ | 5 ★ | 7 | **22** | S1 → {S2, S3, S4} → S5 |
+| 6 | Babylon | 3 | 0 ★ | 5 | 5 ★ | 7 | **20** | S1 → S2 → S3 → {S4, S5} |
+
+Consequences: Rhodes can begin with either foundation (both cost 2 cards; the 2-different one
+brings the first shield); Babylon can construct its 4-different stage before its 3-identical
+effect stage; Ephesus' foundation opens three stages at once.  With two players Alexandria's
+choice is among the same three decks; Halicarnassus' effect still excludes the central deck.
+
+**Engine model.**  `wonders.py` loads each stage with `requires` (the prerequisite indexes) and
+pre-computes, for every 32-entry built-mask, `available(built)`, `vp_of_built(built)`,
+`cost_remaining(built)` and a greedy `plan(built)` (cheapest available stage first — used by the
+heuristic and the feature encoder as "the next stage").  `GameState.built[p]` is the bitmask;
+`_check` collects the *affordable* available stages and, if there are several, presents
+`D_STAGE`; otherwise the single stage is auto-resolved into its `D_PAY` sequence (whose context
+now carries the stage index).  The game ends when `built[p] == 0b11111`.
+
+**Format of `wonders.json`.**  Each Wonder is `{"name", "total_vp", "stages": [5 × {"cost", "kind":
+"identical"|"different", "vp", "effect", "requires": [indexes]}]}` in the cost order above.
+`effect` must be one of the ids in §5.1; `requires` may only name lower indexes; the loader
+asserts that every stage is reachable and that `total_vp` matches.  The order of the `wonders`
+array defines the Wonder ids — do not reorder.  `tests/test_engine.py::TestData::
+test_wonder_stage_tables` pins every VP, effect stage and prerequisite list;
+`test_wonder_stage_graphs` checks `available` against the diagrams.
 
 ### 5.3 Halicarnassus in detail
 
@@ -749,7 +726,7 @@ score(p) = Σ VP of constructed stages
          + military_token_vp (3) × mil_tokens[p]
          + Strategy: 1 × mil_tokens[p]
          + Education: 2 × (total Progress tokens held, including Education)
-         + Decor: 6 if stages[p] == 5 else 4
+         + Decor: 6 if all 5 stages are built else 4
          + Politics: 1 × civ2cat cards held
          + Culture: 12 if 2 copies held else 4
          + cat_vp (2) if cat == p
@@ -779,11 +756,11 @@ The 14 fields of `RulesConfig`, in `rules.py` order (frozen dataclass; verified 
 | `faceup_progress_tokens` | 3 | Face-up token slots (`token_reveal` × 3 at setup; a taken face-up token is replaced immediately). | **CONFIRMED** (rulebook setup). |
 | `military_token_vp` | 3 | VP per Military Victory token (`score_of`). | **CONFIRMED** (rulebook, BGA "(3 points)"). |
 | `cat_vp` | 2 | VP for holding the Cat at the end (`score_of`). | **CONFIRMED** (Board Game Family, BGA game panel, FR AccessiJeux / videoregles). |
-| `double_vs_zero_requires_two` | True | `_resolve_battle`: 1 shield vs 0 gives 1 token (2+ vs 0 gives 2).  Off: literal "≥ twice" → 1 vs 0 gives 2. | **CONFIRMED** (BGA game panel + Gamehelp; a FR rules page); the EN rulebook wording is just "at least twice as many". |
+| `double_vs_zero_requires_two` | True | `_resolve_battle`: 1 shield vs 0 gives 1 token (2+ vs 0 gives 2).  Off: literal "≥ twice" → 1 vs 0 gives 2. | **CONFIRMED** (BGA game panel + Gamehelp; a FR rules page; re-confirmed by the user from the physical rules on 2026-09-14: "1 shield vs 0 gives 1 token"); the EN rulebook wording is just "at least twice as many". |
 | `extra_card_optional` | True | Extra-card token picks (`_placed`, `_build`) carry `SKIP`.  Off: the extra draw is forced. | **CONFIRMED** rulebook "you can use"; BGG 3404463 (question only). |
 | `wonder_effect_optional` | False | Alexandria / Ephesus picks and the Halicarnassus deck choice may be skipped.  Olympia, Babylon and Rhodes are never optional. | **UNKNOWN** (BGG 2835875, 3004888 not retrievable); default = mandatory ("immediately benefit"). |
 | `economy_once_per_build` | **False** | False = the doubled coin is available once per **turn** (`econ_used`, reset at `turn_start`).  True (house rule) = `_build` clears `econ_used` after every stage, so each stage built in the turn may double one coin. | Default **CONFIRMED** (rulebook "each Progress token … once per turn"); True is a house rule. |
-| `economy_forces_build` | True | `_affordable`: the doubled coin counts towards the mandatory-construction check (BGA reading).  Off: `_affordable` treats Economy as already used, so it never forces a build; `PAY_COIN2` is still offered once the stage is affordable without it (§4.2). | **UNKNOWN** (community split: BGA bug #64468 "must use"; BGG 2758424 relayed reply "not forced"). |
+| `economy_forces_build` | True | `_affordable`: the doubled coin counts towards the mandatory-construction check (BGA reading).  Off: `_affordable` treats Economy as already used, so it never forces a build; `PAY_COIN2` is still offered once the stage is affordable without it (§4.2). | **CONFIRMED** by the user from the physical rules (2026-09-14): the doubled coin counts towards the mandatory construction (earlier the community was split: BGA bug #64468 "must use"; BGG 2758424 relayed reply "not forced"). |
 | `coins_free_choice` | True | `_pay_options`: a coin may be spent even when a grey card could be used.  Off: coins only when no grey option exists. | **ENGINE** (rulebook silent; superset of options). |
 | `end_when_no_cards` | True | **No effect** (kept for configuration compatibility).  The game always ends at `turn_start` when all three decks are empty; with 2 players "the mover cannot draw" ≡ "all decks are empty", so both settings coincide (`test_all_decks_empty_ends_the_game_even_with_the_rule_disabled`). | Rule text **CONFIRMED** (decks never refill; "when you cannot take any more actions, your turn is over"); pass-vs-end **UNKNOWN** (BGG 2781153 / 3102322 / 3256390 unanswered). |
 | `token_usable_same_turn` | True | True = a token gained this turn applies to later events of the same turn (including the build that follows a science set), never retroactively.  False = `_token_active` ignores tokens in `tokens_new` (gained this turn, reset at `turn_start`) — covers the six extra-card tokens only; Engineering / Economy gained this turn still apply to this turn's builds (§14 item 7). | **UNKNOWN** — leaning yes (rulebook "whenever you want"); BGG 3429296 answer not retrievable. |
@@ -820,6 +797,35 @@ Board Game Family review, Meeple Mountain / Boardgameshots reviews, the official
 7wondersarchitects.com, FR AccessiJeux / videoregles.net / akoatujou.fr / undecent.fr / FR
 Wikipedia, DE reviews (brettspielblog.ch, siegpunktsammler.de, hall9000.de, spiele-akademie.de),
 IT Balena Ludens, JA bodolog.com, ES studocu rules copy.
+
+### 11.0 Third pass (2026-09-14): physical component data supplied by the user
+
+The two search-based passes below could not reach the card-distribution table or the Wonder
+trays.  On 2026-09-14 the user supplied both from the physical components (the printed
+per-deck card table; the seven boards read from the publisher's component image for Alexandria
+and component photographs for the rest) and answered two rule questions.  As a result:
+
+* **All deck items D5–D9, D11–D14 and D16 are CONFIRMED** (§1.2): every per-deck count, the
+  central deck, the blue split (2 civ3 + 2 civ2cat in the modal deck; 24 cat cards = 10.2 %, so
+  the BGA "over 11 %" remark was loose), Giza 2 / 0 horned cards (as BoostYourPlay said),
+  Alexandria 4 coins / 1 glass / 2 gears / 1 one-horn (as BoostYourPlay said).
+* **All Wonder items W2, W7, W8, W10–W15 are CONFIRMED** (§5.2): totals 30/26/25/24/22/22/20
+  were right; the cost order 2≠ 2= 3≠ 3= 4≠ holds for every Wonder (Giza included — the
+  marketing line about "fewer matching resource cards" refers to nothing in the costs); the
+  effect stages are S2 + S4 for Alexandria / Halicarnassus / Olympia / Babylon, S2 + S3 + S4 for
+  Ephesus and **S1 + S4 for Rhodes** (BGG 2869259's "stages 2 and 4" was wrong); the per-stage VP
+  are as printed, including Babylon's 0-VP stage.  New information no source had mentioned: the
+  **construction prerequisites** are a graph (§4.1), which required the engine's stage model to
+  change from a counter to a bitmask with a stage-choice decision.
+* **T4 / R5 (Economy counts towards the mandatory build) is CONFIRMED** (`economy_forces_build =
+  True`), and **R2 (1 shield vs 0 gives 1 token) re-confirmed**.
+* Still ASSUMED / ENGINE: R6 (Halicarnassus reshuffle), R7 (all decks empty), R9 (same-turn
+  token use), `wonder_effect_optional` (default mandatory).
+
+Every network trained before this pass used the old data and is incompatible with the new
+feature / action layout (§0); they were removed from `models/` (git history keeps them).  The
+lists in §11.1–11.3 are kept as the record of the search-based passes; read them together with
+this section.
 
 ### 11.1 CONFIRMED (two or more independent sources, or mirrored rulebook text) — 21 items
 
@@ -931,10 +937,10 @@ it is exposed as `economy_forces_build` and counted UNKNOWN below.
 
 | Item | Where | What to edit once the physical components / the BGG table are available |
 |---|---|---|
-| Standard Wonder deck (D8, D9, D16, and the exact D5 / D6 values) | `data/decks.json` `standard_wonder_deck`: `wood`, `stone`, `clay`, `papyrus`, `shield`, `tablet`, `compass`, `shield_h2`, `civ3`, `civ2cat` are pure placeholders; `glass` (≥ 2) and `gear` (≥ 1) are bounded; `coin` = 3 and `shield_h1` = 2 are source-backed | Set each kind's count; the deck must sum to 25 (`TestData::test_deck_compositions`).  New kinds (e.g. a 2-shield red card, should one exist after all) are added to `kinds` with the next id; `NUM_KINDS` and the action space grow automatically (`HALI_BASE + kind`), so checkpoints must be retrained. |
-| Per-Wonder deviations (D13) | `data/decks.json` `wonder_deck_overrides.Babylon` / `Ephesus` / `Halicarnassus` / `Olympia` / `Rhodes` (entire entries are placeholders); `Giza.shield` (the replacement card) and any further Giza deviation; `Alexandria` is source-backed | List only the kinds that differ from the standard deck; each Wonder deck must sum to 25. |
-| Central deck (D14) | `data/decks.json` `central_deck` (all 14 counts) | Must sum to 60. |
-| Wonder stage tables (W12, W13, W14, W15; W6 if Ephesus turns out to have 2) | `data/wonders.json` `wonders[*].stages[*]`: `vp` (all), `cost` / `kind` order (all; Giza probably fewer `identical`), `effect` placement for Alexandria / Halicarnassus / Olympia / Ephesus / Babylon (Rhodes `[1, 3]` is SINGLE) | See §5.2; update `TestData::test_wonder_stage_tables` together with the data. |
+| Standard Wonder deck (D8, D9, D16, D5 / D6) | **Resolved 2026-09-14** (§11.0, §1.2): `data/decks.json` carries the printed counts | Nothing left to edit; `TestData::test_deck_compositions` pins the sums.  New kinds would still be added to `kinds` with the next id (`NUM_KINDS` and the action space grow automatically, so checkpoints must be retrained). |
+| Per-Wonder deviations (D13) | **Resolved 2026-09-14**: every Wonder's `wonder_deck_overrides` entry is the printed deviation from the modal deck | — |
+| Central deck (D14) | **Resolved 2026-09-14**: `central_deck` is the printed 60-card composition | — |
+| Wonder stage tables (W12, W13, W14, W15) | **Resolved 2026-09-14** (§11.0, §5.2): `data/wonders.json` now carries the printed VP, effect stages and `requires` lists | Nothing left to edit; `TestData::test_wonder_stage_tables` / `test_wonder_stage_graphs` pin the boards. |
 | `tokens.json` | nothing remains ASSUMED (Science wording and the three resource splits are CONFIRMED); the Economy question is a rule flag | — |
 | Behavioural (code) | `rules.py`: `economy_forces_build` (T4 / R5), `token_usable_same_turn` (R9; partial, §14 item 7), `wonder_effect_optional`; `state.py` / `env.py`: all-decks-empty ending (R7), whole-deck Halicarnassus reshuffle (R6), Halicarnassus reveals public, Military-token / Progress-token supply, Cat start wording, youngest player | Flags where they exist; otherwise code. |
 
@@ -1012,77 +1018,64 @@ access can fill the table in from these:
 
 ## 13. Worked example: one full turn
 
-Real trace from `Environment(wonders=(2, 6), seed=5)` (player 0 = Alexandria, player 1 = Babylon)
-with uniformly random actions (`random.Random(5)` over `legal_actions()`), turn 36, player 0 to
-move.  `describe()` output has been condensed; the queue shown is `state.queue` at each decision
-node (the popped item being handled is not in it).  Re-verified on 2026-09-13 against the current
-`decks.json` (Giza edit, blue re-fit) and engine: the same seed reproduces this state at turn 36
-and every step below — the two re-fitted blue cards of the Alexandria and Babylon decks sit
-below the cards drawn by turn 36, so only the number of *distinct* kinds left in deck 0 changed
-(step 3).
+Real trace from `Environment(wonders=(1, 5), seed=3)` (player 0 = Rhodes, player 1 = Ephesus)
+with uniformly random actions (`random.Random(3)` over `legal_actions()`), turn 12, player 0 to
+move.  Generated on 2026-09-14 with the confirmed deck and Wonder data; the turn contains the
+stage-choice decision that Rhodes' two independent foundations create.  `describe()` output has
+been condensed; the queue shown is `state.queue` at each decision node (the popped item being
+handled is not in it).
 
-**State at the start of turn 36** — conflict 0/3, Cat held by P1, face-up tokens Economy /
-Decor / Science, stack 9.
+**State at the start of turn 12** — conflict 1/3, Cat held by P0, face-up tokens Culture /
+Education / Decor, stack 11.
 
-| | P0 — Alexandria | P1 — Babylon |
+| | P0 — Rhodes | P1 — Ephesus |
 |---|---|---|
-| stages | 3/5 (VP 3+4+5 = 12) | 3/5 (VP 3+3+4 = 10) |
-| tableau | wood, stone, glass, coin, civ2cat, tablet, gear, shield | civ3, civ2cat×2, shield |
-| tokens | — | Tactics, Education, Politics |
-| shields / mil tokens | 1 / 2 | 1 + 2 (Tactics) = 3 / 2 |
-| score | 12 + 2 (blue) + 6 (mil) = **20** | 10 + 7 (blue) + 6 (mil) + 6 (Education: 3 tokens) + 2 (Politics: 2 icons) + 2 (Cat) = **33** |
+| stages | none built (`built = 0`, available S1 and S2) | S1 (2≠, 3 VP) |
+| tableau | wood, civ3, civ2cat, gear | civ3, civ2cat, shield, shield_h1 |
+| tokens | Architecture | — |
+| shields / mil tokens | 0 / 0 | 2 / 0 |
+| score | 5 (blue) + 2 (Cat) = **7** | 3 (stage) + 5 (blue) = **8** |
 
-Decks: deck 0 (P0's) 7 cards, top `coin`; deck 1 (P1's) 16 cards, top `tablet`; central 50 cards,
-top `civ2cat` **known to both players** (`central_known_to = 3`: one player peeked while holding
-the Cat, the Cat then changed hands and the new holder's `turn_start` learned the same card, §8.2;
-nobody has drawn it since).
+Decks: deck 0 (P0's) 21 cards, top `wood`; deck 1 (P1's) 22 cards, top `shield_h1`; central
+55 cards, top `coin` **known to P0 only** (`central_known_to = 1`: the Cat holder's peek).
 
-1. **`turn_start`** (P0): `tokens_used = 0`, `econ_used = False`; not all decks empty; P0 does
-   not hold the Cat → no peek (P0 still knows the central top).  Queue → `pick main`, `end_turn`.
+1. **`turn_start`** (P0): `tokens_used = 0`, `econ_used = False`; not all decks empty; P0 holds
+   the Cat and the central top is still unknown to them → chance `peek` (55 outcomes weighted by
+   the unseen counts) resolves to **coin**.  Queue → `pick main`, `end_turn`.
 2. **Main pick** — `decision[pick] ctx=('main', False, (0,1,2))`, legal `PICK_LEFT` (deck 0:
-   coin), `PICK_RIGHT` (deck 1: tablet), `PICK_CENTER` (civ2cat, known — would be deterministic);
-   queue `(end_turn)`.  **Chosen: `PICK_LEFT`.**  `take(0)`: deck 0 → 6 cards, top hidden; queue
-   `reveal 0`, `placed coin`, `end_turn`.
-3. **Chance `reveal` deck 0** — 6 distinct kinds possible (one card of each: deck 0's 6 unseen
-   cards are all different), probabilities = unseen counts / 6; the environment resolves it with
-   the true next card: **civ3** (now visible to both).
-4. **`placed(coin, main)`** — P0 tableau coin×2.  A yellow card would trigger Jewellery, which
-   P0 does not hold.  Queue `check`, `end_turn`.
-5. **`check`** — science first: tablet×1, gear×1 → no set.  Construction: Alexandria stage 4
-   costs **3 identical**.  P0 holds wood, stone, glass (one each) and coin×2, no Engineering /
-   Economy: `_max_value` (identical) = best single resource 1 + 2 coins = 3 ≥ 3 → **mandatory
-   build**.  `decision[pay] ctx=()`, legal `pay_wood`, `pay_stone`, `pay_glass` (each: 1 + 2 coins
-   = 3).  `pay_coin` is *not* legal first: codes must be non-decreasing, so after a coin only coins
-   could follow (1 + 1 = 2 < 3).  **Chosen: `pay_wood`.**  `ctx=(0,)`: need 2, the same-resource
-   grey is exhausted → `pay_coin` is the single option → auto-resolved; `ctx=(0,5)`: need 1 →
-   `pay_coin` auto-resolved.  `_build`: wood + coin + coin to the discard, `stages[0] = 4`
-   (+6 VP → 26), effect `any_deck_card`; no Architecture; queue `pick alexandria` (mandatory),
-   `check`, `end_turn`.
-6. **Alexandria pick** — `decision[pick] ctx=('alexandria', False, (0,1,2))`, legal `PICK_LEFT`
-   (civ3), `PICK_RIGHT` (tablet), `PICK_CENTER` (the known civ2cat).  **Chosen: `PICK_RIGHT`.**
-   Chance `reveal` deck 1 (10 kinds) → **shield_h1**.  `placed(tablet, alexandria)`: P0
-   tablet×2; a green card would trigger the Science token, not held; queue `check`, `check`,
+   wood), `PICK_RIGHT` (deck 1: shield_h1), `PICK_CENTER` (the peeked coin — deterministic for
+   P0); queue `(end_turn)`.  **Chosen: `PICK_CENTER`.**  `take(2)`: the known card is taken
+   without a chance node; central → 54, `central_known_to = 0`; queue `placed coin`, `end_turn`.
+3. **`placed(coin, main)`** — P0 tableau wood + coin.  A yellow card would trigger Jewellery,
+   not held.  Queue `check`, `end_turn`.
+4. **`check`** — science first: gear×1 → no set.  Construction: Rhodes has **two** available
+   stages (`available(0) = (S1, S2)`): S1 costs 2 different, S2 costs 2 identical.  With wood +
+   coin (wild) both are affordable (`_max_value` = 1 grey + 1 coin = 2 in either mode) →
+   mandatory build **with a choice**: `decision[stage] ctx=(0, 1)`, legal `build_stage_1`,
+   `build_stage_2`.  **Chosen: `build_stage_1`** → queue `pay S1 ()`.  Payment: `pay_wood` is the
+   only legal first step (a coin first could only be followed by coins, and only one is held) →
+   auto-resolved; `pay_coin` is then the single completion → auto-resolved.  `_build(S1)`: wood +
+   coin to the discard, `built[0] = 0b00001` (+4 VP → 11), effect `shield` → `wonder_shields[0] =
+   1`; Architecture is held and unused → queue `pick token:Architecture` (optional), `check`,
    `end_turn`.
-7. **`check`** — science first: tablet×2 is the only possible set → **auto-resolved**: tablet×2
-   to the discard; queue `token_choice science`, `check`, `check`, `end_turn`.
-   **`decision[token] ctx=science`**, legal `token_Science`, `token_Economy`, `token_Decor`,
-   `token_blind`.  **Chosen: `token_Decor`** (+4 VP while the Wonder is unfinished → 30).  Queue
-   `token_reveal`, …; chance `token_reveal` (8 distinct types among the 9 in the stack) →
-   **Engineering** fills the slot; face-up now Economy / Science / Engineering, stack 8.
-8. **`check` × 2** — no science set (gear×1); stage 5 costs **4 different**; P0 holds stone and
-   glass → 2 < 4, not affordable.  Nothing happens.
-9. **`end_turn`** — no Battle pending (conflict 0/3), no Wonder complete → `mover = 1`,
-   `turn = 37`, queue `turn_start`.  At P1's `turn_start` P1 holds the Cat but already knows the
-   central top → no new peek → P1's main pick.
+5. **Architecture pick** — `decision[pick] ctx=('token:0', True, (0,1,2))`, legal `PICK_LEFT`
+   (wood), `PICK_RIGHT` (shield_h1), `PICK_CENTER` (blind), `SKIP`.  **Chosen: `PICK_RIGHT`.**
+   Chance `reveal` deck 1 → **clay** becomes its new top.  `placed(shield_h1, token:0)`:
+   `tokens_used` marks Architecture; 1 horn → `conflict = 2` (no Battle yet); Propaganda would
+   trigger, not held; queue `check`, `check`, `end_turn`.
+6. **`check` × 2** — no science set; the only available stage is now S2 (`available(0b00001) =
+   (S2,)`, 2 identical) and P0 holds no resource card → not affordable.  Nothing happens.
+7. **`end_turn`** — no Battle pending (conflict 2/3), no Wonder complete → `mover = 1`,
+   `turn = 13`, queue `turn_start`.
 
-**State at the start of turn 37**: P0 **30** points (stages 3+4+5+6 = 18, blue 2, mil 6, Decor 4),
-P1 33; P0 tableau stone, glass, civ2cat, gear, shield, tokens Decor; deck 0: 6 cards top civ3;
-deck 1: 15 cards top shield_h1; central 50, top civ2cat still known to both.  Card count check:
-110 = tableaus (5 + 4) + unseen (5 + 14 + 49) + visible / known tops (3) + discard (30).
+**State at the start of turn 13**: P0 **11** points (S1 4, blue 5, Cat 2), shields 2 (1 permanent
+from the Rhodes foundation + the horn card), P1 8, shields 2; P0 tableau civ3, civ2cat, gear,
+shield_h1; deck 0: 21 cards top wood; deck 1: 21 cards top clay; central 54, top unknown to
+both (`central_known_to = 0`); conflict 2/3.
 
-Decisions actually presented to the agent this turn: 4 (main pick, first payment step, Alexandria
-pick, token choice); chance nodes resolved by the environment: 3 (two Wonder-deck reveals, one
-token refill); auto-resolved: two payment steps and the science set.
+Decisions actually presented to the agent this turn: 3 (main pick, stage choice, Architecture
+pick); chance nodes resolved by the environment: 2 (the Cat peek, one Wonder-deck reveal);
+auto-resolved: two payment steps.
 
 ---
 

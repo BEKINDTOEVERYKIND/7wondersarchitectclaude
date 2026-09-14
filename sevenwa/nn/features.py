@@ -2,7 +2,7 @@
 
 Layout (all values roughly in [0, 1]):
 
-* ``me`` block, ``opp`` block            – wonder, stages, next stage, tableau, science, tokens, military
+* ``me`` block, ``opp`` block            – wonder, built/available stages (per stage), tableau, science, tokens, military
 * ``deck_own``, ``deck_opp``, ``deck_center`` – size, visible top card, unseen-multiset histogram
 * ``global`` block                         – progress tokens, conflict, cat, decision context
 
@@ -16,9 +16,10 @@ import numpy as np
 
 from ..engine.actions import Actions as A
 from ..engine.cards import BLUE, GREEN, GREY, KINDS, NUM_KINDS, RED, YELLOW, KIND_OF_SYMBOL, COIN_KIND, KIND_OF_RESOURCE
-from ..engine.state import (CENTRAL, D_HALI_CHOOSE, D_PAY, D_PICK, GameState, N_DECISION, PAY_COIN2_CODE, PAY_COIN_CODE)
+from ..engine.state import (CENTRAL, D_HALI_CHOOSE, D_PAY, D_PICK, D_STAGE, GameState, N_DECISION, PAY_COIN2_CODE,
+                            PAY_COIN_CODE)
 from ..engine.tokens import NUM_TOKEN_TYPES, TOKENS
-from ..engine.wonders import EFFECTS, NUM_WONDERS, WONDERS
+from ..engine.wonders import EFFECTS, NUM_STAGES, NUM_WONDERS, WONDERS
 
 # ---- static card-kind feature table: kind one-hot | type one-hot | resource one-hot | vp | cat | symbol one-hot | shields | horns
 KIND_FEATS = NUM_KINDS + 5 + 5 + 1 + 1 + 3 + 1 + 1
@@ -47,11 +48,24 @@ _SHIELD_TOKEN_IDS = [t.id for t in TOKENS if t.shields > 0]
 _SYMBOL_KINDS = [KIND_OF_SYMBOL[s] for s in range(3)]
 _GREY_KIND_IDS = [KIND_OF_RESOURCE[r] for r in range(5)]
 
-PLAYER_FEATS = (NUM_WONDERS + 6 + (3 + 2 + 1 + len(EFFECTS)) + 1 + NUM_KINDS * 2 + 4 + 2 + 3 + 2
+# static per-stage description: cost one-hot (2/3/4) | identical/different | vp/10 | effect one-hot
+STAGE_STATIC = 3 + 2 + 1 + len(EFFECTS)
+_STAGE_TABLE = np.zeros((NUM_WONDERS, NUM_STAGES, STAGE_STATIC), dtype=np.float32)
+for _w in WONDERS:
+    for _st in _w.stages:
+        row = _STAGE_TABLE[_w.id, _st.index]
+        row[min(_st.cost, 4) - 2] = 1.0
+        row[3 + _st.kind] = 1.0
+        row[5] = _st.vp / 10.0
+        row[6 + _EFFECT_INDEX[_st.effect]] = 1.0
+# per stage: built | available | affordable-now-with-own-cards | static description
+STAGE_FEATS = 3 + STAGE_STATIC
+PLAYER_FEATS = (NUM_WONDERS + 6 + NUM_STAGES * STAGE_FEATS + 3 + NUM_KINDS * 2 + 4 + 2 + 3 + 2
                 + NUM_TOKEN_TYPES * 2 + 3 + 1 + 1)
 DECK_FEATS = 3 + KIND_FEATS + NUM_KINDS + 6
 PICK_REASONS = ["main", "token", "alexandria", "ephesus", "hali", "olympia"]
-GLOBAL_FEATS = (NUM_TOKEN_TYPES * 2 + 1) + (4 + 1) + 3 + 2 + 2 + 6 + (len(PICK_REASONS) + 1) + (1 + 7) + NUM_KINDS + 1
+GLOBAL_FEATS = ((NUM_TOKEN_TYPES * 2 + 1) + (4 + 1) + 3 + 2 + 2 + 7 + (len(PICK_REASONS) + 1) + (1 + 7 + NUM_STAGES)
+                + NUM_KINDS + 1)
 
 ME_SLICE = (0, PLAYER_FEATS)
 OPP_SLICE = (PLAYER_FEATS, 2 * PLAYER_FEATS)
@@ -63,22 +77,49 @@ FEATURE_SIZE = GLOBAL_SLICE[1]
 ENTITY_SLICES: List[Tuple[int, int]] = [ME_SLICE, OPP_SLICE, DECK_OWN_SLICE, DECK_OPP_SLICE, DECK_CENTER_SLICE, GLOBAL_SLICE]
 
 
+_ENGINEERING_IDS = [t.id for t in TOKENS if t.kind == "engineering"]
+_ECONOMY_IDS = [t.id for t in TOKENS if t.kind == "economy"]
+
+
+def _affordable(s: GameState, p: int, stage) -> bool:
+    """Could player ``p`` pay ``stage`` with the cards they hold right now (coins wild, Engineering/Economy)?"""
+    cl = s.cards[p]
+    greys = [cl[k] for k in _GREY_KIND_IDS]
+    coins = cl[COIN_KIND]
+    toks = s.tokens[p]
+    econ = coins >= 1 and any(toks[t] for t in _ECONOMY_IDS) and not (p == s.mover and s.econ_used)
+    cap = coins + (1 if econ else 0)
+    if any(toks[t] for t in _ENGINEERING_IDS):
+        value = sum(greys) + cap
+    elif stage.kind == 0:
+        value = max(greys) + cap
+    else:
+        value = sum(1 for g in greys if g > 0) + cap
+    return value >= stage.cost
+
+
 def _player_block(out: np.ndarray, off: int, s: GameState, p: int, is_mover: bool) -> None:
     w = WONDERS[s.wonder[p]]
     out[off + s.wonder[p]] = 1.0
     o = off + NUM_WONDERS
-    st = s.stages[p]
-    out[o + st] = 1.0
+    built = s.built[p]
+    n_built = s.num_stages(p)
+    out[o + n_built] = 1.0
     o += 6
-    if st < 5:
-        stage = w.stages[st]
-        out[o + min(stage.cost, 4) - 2] = 1.0
-        out[o + 3 + stage.kind] = 1.0
-        out[o + 5] = stage.vp / 10.0
-        out[o + 6 + _EFFECT_INDEX[stage.effect]] = 1.0
-    o += 3 + 2 + 1 + len(EFFECTS)
-    out[o] = (5 - st) / 5.0
-    o += 1
+    avail = w.available(built)
+    for i in range(NUM_STAGES):
+        if (built >> i) & 1:
+            out[o] = 1.0
+        elif i in avail:
+            out[o + 1] = 1.0
+            if _affordable(s, p, w.stages[i]):
+                out[o + 2] = 1.0
+        out[o + 3:o + STAGE_FEATS] = _STAGE_TABLE[w.id, i]
+        o += STAGE_FEATS
+    out[o] = (5 - n_built) / 5.0
+    out[o + 1] = w.cost_remaining(built) / 14.0
+    out[o + 2] = (w.total_vp - w.vp_of_built(built)) / 30.0
+    o += 3
     cl = s.cards[p]
     cards = np.array(cl, dtype=np.float32)
     out[o:o + NUM_KINDS] = cards * 0.25
@@ -169,7 +210,7 @@ def _global_block(out: np.ndarray, off: int, s: GameState, mover: int) -> None:
     o += 2
     if s.node_type == N_DECISION:
         out[o + s.dkind] = 1.0
-    o += 6
+    o += 7
     if s.node_type == N_DECISION and s.dkind == D_PICK:
         reason, optional, _ = s.dctx
         r = reason.split(":")[0]
@@ -177,13 +218,17 @@ def _global_block(out: np.ndarray, off: int, s: GameState, mover: int) -> None:
         out[o + len(PICK_REASONS)] = 1.0 if optional else 0.0
     o += len(PICK_REASONS) + 1
     if s.node_type == N_DECISION and s.dkind == D_PAY:
-        chosen = s.dctx
+        stage_idx, chosen = s.dctx
         val = 0
         for c in chosen:
             out[o + 1 + c] += 1.0
             val += 2 if c == PAY_COIN2_CODE else 1
         out[o] = val / 4.0
-    o += 1 + 7
+        out[o + 8 + stage_idx] = 1.0
+    elif s.node_type == N_DECISION and s.dkind == D_STAGE:
+        for i in s.dctx:
+            out[o + 8 + i] = 0.5
+    o += 1 + 7 + NUM_STAGES
     if s.node_type == N_DECISION and s.dkind == D_HALI_CHOOSE:
         _, revealed = s.dctx
         for k in revealed:

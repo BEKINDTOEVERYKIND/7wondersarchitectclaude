@@ -47,7 +47,7 @@ existing data shards.
 | Engine, random play | ~33 µs per ply; 50 games in 0.1 s |
 | Heuristic policy | ~70 µs per decision; heuristic self-play ~150 games/s |
 | Heuristic playout (to game end) | ~4 ms |
-| Feature encoding | ~48 µs per state (437 features) |
+| Feature encoding | ~60 µs per state (581 features; 437 before the 2026-09-14 rules correction) |
 | Network forward (256×4 residual MLP, 1.4 M params) | ~1.3 ms per batch of 8 |
 | Neural MCTS, 96 simulations | ~50 ms per decision (≈ 3.5 s per game) |
 | Rollout-MCTS, 64 heuristic playouts | ~0.3 s per decision |
@@ -238,6 +238,19 @@ imitation network: at 600 simulations v5 beats itself at 150 simulations 15-9 (6
 the strongest play use as many simulations as your time budget allows, e.g.
 `net:models/expert_v6.pt:600` (about 0.5 s per decision on one CPU core); the optional value
 temperature (`:1.75:1.45`) is neutral.
+
+### Rules correction of 2026-09-14 and the retraining that followed
+
+The exact per-deck card distribution and the seven Wonder boards (per-stage VP, effect stages
+and the printed construction prerequisites) were supplied from the physical components and
+replaced the assumed data.  The engine's stage model changed from a counter to a bitmask with a
+stage-choice decision (`D_STAGE`, 5 new actions), and the feature encoder now describes every
+stage (built / available / affordable + static description), so `FEATURE_SIZE` went from 437 to
+581 and `Actions.NUM` from 44 to 49.  All measurements above were made under the old data; the
+old checkpoints cannot be loaded by the new code and were removed (git history up to `bb15851`
+keeps them).  The heuristic teacher was re-validated on the new rules with the paired A/B
+harness (see the entries below) and the network was retrained from scratch: imitation
+bootstrap, then expert iteration.
 
 ### Reproducing
 

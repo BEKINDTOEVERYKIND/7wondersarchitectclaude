@@ -1,5 +1,5 @@
 {
-  "_status": "Deck sizes (25 per Wonder, 60 central) CONFIRMED; every red card = 1 shield with 0/1/2 horns CONFIRMED; standard deck has 3 coins and Alexandria 4 CONFIRMED; each Wonder deck differs from the standard by ~2-3 cards CONFIRMED; Giza has 2 one-horn and 0 two-horn military cards SINGLE-SOURCE; game-wide proportions (>1/3 grey, ~12% coins, ~17% each blue/green/red, >11% cat cards) SINGLE-SOURCE and satisfied; all other per-deck counts ASSUMED (the exact table is BGG file 233664 / image 6620199, an image that could not be retrieved)",
+  "_status": "CONFIRMED (user-supplied physical card table, 2026-09-14): every per-deck count below is the exact printed distribution; 25 cards per Wonder deck, 60 in the central deck, 235 in total (27 coins, 24 two-VP cat cards, 16 three-VP cards, 18/15/8 red cards with 0/1/2 horns, 14 of each science symbol, 17 of each resource)",
   "_kinds_note": "type: grey (resource), yellow (coin), blue (vp, cat), green (symbol), red (shields, horns)",
   "kinds": [
     {
@@ -98,63 +98,70 @@
     "papyrus": 2,
     "glass": 2,
     "coin": 3,
-    "civ3": 1,
-    "civ2cat": 3,
-    "tablet": 2,
+    "civ3": 2,
+    "civ2cat": 2,
+    "tablet": 1,
     "gear": 1,
     "compass": 1,
-    "shield": 1,
+    "shield": 2,
     "shield_h1": 2,
     "shield_h2": 1
   },
   "wonder_deck_overrides": {
-    "_note": "Per-wonder deviations from the standard deck. Alexandria: coin 4 CONFIRMED (BoostYourPlay 'one more Gold than normal' + BGG file 233664 description 'Alexandria contains 4 gold'); gear +1, glass -1, one-horn -1 SINGLE-SOURCE (BoostYourPlay). Giza: '2 1-horned Military cards and 0 2-horned Military cards' SINGLE-SOURCE (BoostYourPlay); the card replacing the missing two-horn card is ASSUMED to be a hornless red. Babylon, Ephesus, Halicarnassus, Olympia, Rhodes: ASSUMED placeholders (science-symbol rotation); no source names their deviations. Blue split 1x3VP / 3x2VP+cat per Wonder deck is a re-fit so that cat cards exceed 11% of all cards (BGA: 'over 11% of the cards let you take control of the cat pawn').",
-    "Alexandria": {
-      "coin": 4,
-      "gear": 2,
-      "glass": 1,
-      "shield_h1": 1
-    },
-    "Babylon": {
-      "tablet": 1,
-      "gear": 2,
-      "compass": 1
-    },
+    "_note": "CONFIRMED (user-supplied table). 'standard_wonder_deck' is the modal value of each kind over the seven decks; each Wonder lists only the kinds where it differs.  Full decks: Ephesus w2 s2 c2 p2 g2 coin3 cat2 civ3x1 red2 h1x1 h2x1 compass2 gear1 tablet2; Giza w2 s2 c1 p2 g2 coin3 cat3 civ3x2 red2 h1x2 h2x0 compass2 gear1 tablet1; Alexandria w2 s2 c2 p2 g1 coin4 cat2 civ3x2 red2 h1x1 h2x1 compass1 gear2 tablet1; Rhodes w2 s2 c2 p2 g2 coin2 cat2 civ3x2 red2 h1x2 h2x1 compass1 gear2 tablet1; Babylon w2 s1 c2 p2 g2 coin3 cat2 civ3x2 red2 h1x1 h2x1 compass2 gear2 tablet1; Olympia w1 s2 c2 p2 g2 coin3 cat3 civ3x1 red2 h1x2 h2x1 compass1 gear1 tablet2; Halicarnassus w2 s2 c2 p1 g2 coin3 cat2 civ3x2 red2 h1x2 h2x1 compass1 gear1 tablet2",
     "Ephesus": {
-      "tablet": 1,
-      "gear": 1,
-      "compass": 2
+      "civ3": 1,
+      "shield_h1": 1,
+      "compass": 2,
+      "tablet": 2
     },
     "Giza": {
-      "shield": 2,
-      "shield_h2": 0
-    },
-    "Halicarnassus": {
-      "tablet": 1,
-      "gear": 1,
+      "clay": 1,
+      "civ2cat": 3,
+      "shield_h2": 0,
       "compass": 2
     },
-    "Olympia": {
-      "tablet": 1,
-      "gear": 2,
-      "compass": 1
+    "Alexandria": {
+      "glass": 1,
+      "coin": 4,
+      "shield_h1": 1,
+      "gear": 2
     },
-    "Rhodes": {}
+    "Rhodes": {
+      "coin": 2,
+      "gear": 2
+    },
+    "Babylon": {
+      "stone": 1,
+      "shield_h1": 1,
+      "compass": 2,
+      "gear": 2
+    },
+    "Olympia": {
+      "wood": 1,
+      "civ2cat": 3,
+      "civ3": 1,
+      "tablet": 2
+    },
+    "Halicarnassus": {
+      "papyrus": 1,
+      "tablet": 2
+    }
   },
   "central_deck": {
-    "wood": 3,
+    "wood": 4,
     "stone": 4,
-    "clay": 3,
-    "papyrus": 3,
-    "glass": 3,
-    "coin": 8,
-    "civ3": 6,
-    "civ2cat": 6,
+    "clay": 4,
+    "papyrus": 4,
+    "glass": 4,
+    "coin": 6,
+    "civ3": 4,
+    "civ2cat": 8,
     "tablet": 4,
     "gear": 4,
     "compass": 4,
-    "shield": 3,
-    "shield_h1": 6,
-    "shield_h2": 3
+    "shield": 4,
+    "shield_h1": 4,
+    "shield_h2": 2
   }
 }

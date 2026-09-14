@@ -19,7 +19,7 @@ from sevenwa.engine.cards import NUM_KINDS
 from sevenwa.engine.env import Environment, make_env
 from sevenwa.engine.state import CENTRAL, D_HALI_CHOOSE, D_HALI_DECK
 
-from conftest import (K, W, assert_invariants, check, edit, give_many, initial_composition, is_main_pick_of,
+from conftest import (K, W, assert_invariants, check, edit, first_n, give_many, initial_composition, is_main_pick_of,
                       physical_matches_belief, random_env_game, set_deck, sync_env_to_state)
 
 
@@ -204,7 +204,7 @@ class TestPhysicalModel:
         """Halicarnassus (P0) about to build stage 2 with the given physical deck 0 (top first)."""
         env = make_env(seed, wonders=(W.Halicarnassus, W.Giza))
         c = edit(env.state)
-        c.stages[0] = 1
+        c.built[0] = first_n(1)
         give_many(c, 0, [K.stone, K.stone])
         set_deck(c, 0, deck0[0], deck0[1:])
         sync_env_to_state(env, c, seed)

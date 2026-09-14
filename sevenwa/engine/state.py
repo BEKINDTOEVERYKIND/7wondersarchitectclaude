@@ -49,8 +49,8 @@ from .rules import RulesConfig
 from .tokens import (K_CULTURE, K_ECONOMY, K_ENGINEERING, K_EXTRA_ON_BUILD, K_EXTRA_ON_GREEN, K_EXTRA_ON_HORN,
                      K_EXTRA_ON_RESOURCE, K_SHIELDS, K_VP_CAT, K_VP_MIL, K_VP_PROG, K_VP_WONDER, NUM_TOKEN_TYPES,
                      TOKENS)
-from .wonders import (DIFFERENT, E_ANY_DECK, E_CENTRAL, E_LEFT_RIGHT, E_LOOK5, E_NONE, E_SHIELD, E_TOKEN,
-                      IDENTICAL, WONDERS)
+from .wonders import (ALL_BUILT, DIFFERENT, E_ANY_DECK, E_CENTRAL, E_LEFT_RIGHT, E_LOOK5, E_NONE, E_SHIELD, E_TOKEN,
+                      IDENTICAL, NUM_STAGES, WONDERS, popcount)
 
 CENTRAL = 2
 NUM_DECKS = 3
@@ -59,8 +59,8 @@ NUM_DECKS = 3
 N_DECISION, N_CHANCE, N_TERMINAL = 0, 1, 2
 
 # decision kinds
-D_PICK, D_PAY, D_SCIENCE, D_TOKEN, D_HALI_DECK, D_HALI_CHOOSE = range(6)
-DECISION_NAMES = ["pick", "pay", "science", "token", "hali_deck", "hali_choose"]
+D_PICK, D_PAY, D_SCIENCE, D_TOKEN, D_HALI_DECK, D_HALI_CHOOSE, D_STAGE = range(7)
+DECISION_NAMES = ["pick", "pay", "science", "token", "hali_deck", "hali_choose", "stage"]
 # chance kinds
 C_REVEAL, C_DRAW_CENTRAL, C_PEEK, C_TOKEN_REVEAL, C_TOKEN_BLIND, C_HALI_REVEAL = range(6)
 CHANCE_NAMES = ["reveal", "draw_central", "peek", "token_reveal", "token_blind", "hali_reveal"]
@@ -89,7 +89,7 @@ class GameState:
     """Immutable-by-convention belief state (``apply_*`` return modified copies)."""
 
     __slots__ = (
-        "rules", "wonder", "stages", "cards", "tokens", "wonder_shields", "mil_tokens",
+        "rules", "wonder", "built", "cards", "tokens", "wonder_shields", "mil_tokens",
         "deck_top", "unseen", "deck_size", "central_known_to", "discard",
         "faceup", "prog_unseen", "prog_stack", "conflict", "cat",
         "mover", "turn", "tokens_used", "econ_used", "battle_pending", "wonder_done", "game_over",
@@ -106,7 +106,7 @@ class GameState:
         s = GameState()
         s.rules = rules or RulesConfig()
         s.wonder = (int(wonders[0]), int(wonders[1]))
-        s.stages = [0, 0]
+        s.built = [0, 0]  # per player: bitmask of constructed stages (bit i = stage i in cost order)
         s.cards = [[0] * NUM_KINDS, [0] * NUM_KINDS]
         s.tokens = [[0] * NUM_TOKEN_TYPES, [0] * NUM_TOKEN_TYPES]
         s.wonder_shields = [0, 0]
@@ -148,7 +148,7 @@ class GameState:
         s = GameState()
         s.rules = self.rules
         s.wonder = self.wonder
-        s.stages = list(self.stages)
+        s.built = list(self.built)
         s.cards = [list(self.cards[0]), list(self.cards[1])]
         s.tokens = [list(self.tokens[0]), list(self.tokens[1])]
         s.wonder_shields = list(self.wonder_shields)
@@ -234,8 +234,9 @@ class GameState:
         s0, s1 = self.scores()
         if s0 != s1:
             return (1.0, -1.0) if s0 > s1 else (-1.0, 1.0)
-        if self.rules.tiebreak_stages and self.stages[0] != self.stages[1]:
-            return (1.0, -1.0) if self.stages[0] > self.stages[1] else (-1.0, 1.0)
+        n0, n1 = popcount(self.built[0]), popcount(self.built[1])
+        if self.rules.tiebreak_stages and n0 != n1:
+            return (1.0, -1.0) if n0 > n1 else (-1.0, 1.0)
         return (0.0, 0.0)
 
     def score_diff(self) -> float:
@@ -244,7 +245,7 @@ class GameState:
 
     def key(self) -> bytes:
         return repr((
-            self.wonder, self.stages, self.cards, self.tokens, self.wonder_shields, self.mil_tokens,
+            self.wonder, self.built, self.cards, self.tokens, self.wonder_shields, self.mil_tokens,
             self.deck_top, self.unseen, self.deck_size, self.central_known_to, self.faceup, self.prog_unseen,
             self.conflict, self.cat, self.mover, self.tokens_used, self.econ_used, self.battle_pending,
             self.wonder_done, self.game_over, self.queue, self.node_type, self.dkind, self.dctx, self.ckind, self.cctx,
@@ -260,8 +261,7 @@ class GameState:
         return (self.score_of(0), self.score_of(1))
 
     def score_of(self, p: int) -> int:
-        w = WONDERS[self.wonder[p]]
-        total = sum(w.stages[i].vp for i in range(self.stages[p]))
+        total = WONDERS[self.wonder[p]].vp_of_built(self.built[p])
         cards = self.cards[p]
         for k in KINDS:
             if k.type == BLUE and cards[k.id]:
@@ -285,7 +285,7 @@ class GameState:
             elif t.kind == K_VP_PROG:
                 total += t.vp * n_tokens
             elif t.kind == K_VP_WONDER:
-                total += t.vp_complete if self.stages[p] >= 5 else t.vp_incomplete
+                total += t.vp_complete if self.built[p] == ALL_BUILT else t.vp_incomplete
             elif t.kind == K_VP_CAT:
                 total += t.vp * sum(self.cards[p][k] for k in _CAT_KINDS)
             elif t.kind == K_CULTURE:
@@ -301,6 +301,17 @@ class GameState:
         for t in _SHIELD_TOKS:
             total += self.tokens[p][t] * TOKENS[t].shields
         return total
+
+    def num_stages(self, p: int) -> int:
+        """Number of constructed Wonder stages of player ``p``."""
+        return popcount(self.built[p])
+
+    def available_stages(self, p: int) -> Tuple[int, ...]:
+        """Stage indexes player ``p`` may construct next (unbuilt, prerequisites built)."""
+        return WONDERS[self.wonder[p]].available(self.built[p])
+
+    def wonder_complete(self, p: int) -> bool:
+        return self.built[p] == ALL_BUILT
 
     def science_counts(self, p: int) -> List[int]:
         return [self.cards[p][KIND_OF_SYMBOL[s]] for s in range(len(SYMBOLS))]
@@ -444,7 +455,7 @@ class GameState:
         if op == "check":
             return self._check()
         if op == "pay":
-            return self._pay_decision(item[1])
+            return self._pay_decision(item[1], item[2])
         if op == "token_choice":
             return self._token_choice(item[1])
         if op == "hali_deck":
@@ -532,9 +543,12 @@ class GameState:
         sci = self._science_options()
         if sci:
             return self._set_decision(D_SCIENCE, None, sci)
-        if self.stages[m] < 5 and self._affordable():
-            return self._pay_decision(())
-        return False
+        opts = [i for i in self.available_stages(m) if self._affordable(i)]
+        if not opts:
+            return False
+        # several affordable stages (Rhodes' two foundations, Ephesus' three middle stages...): the player
+        # chooses which one to construct; a single option is auto-resolved by ``_set_decision``
+        return self._set_decision(D_STAGE, tuple(opts), [A.STAGE_BASE + i for i in opts])
 
     def _science_options(self) -> List[int]:
         if self.tokens_remaining() == 0:
@@ -546,8 +560,8 @@ class GameState:
         return opts
 
     # ---- payment
-    def _stage(self):
-        return WONDERS[self.wonder[self.mover]].stages[self.stages[self.mover]]
+    def _stage_at(self, i: int):
+        return WONDERS[self.wonder[self.mover]].stages[i]
 
     def _pay_state(self, chosen: Tuple[int, ...]):
         m = self.mover
@@ -571,11 +585,11 @@ class GameState:
                 econ_used = True
         return grey_avail, coins_avail, value, econ_used, used_res
 
-    def _mode(self) -> int:
-        """0 identical, 1 different, 2 any (Engineering)."""
+    def _mode(self, i: int) -> int:
+        """0 identical, 1 different, 2 any (Engineering) for stage ``i`` of the mover's Wonder."""
         if any(self.tokens[self.mover][t] for t in _ENGINEERING):
             return 2
-        return 0 if self._stage().kind == IDENTICAL else 1
+        return 0 if self._stage_at(i).kind == IDENTICAL else 1
 
     def _max_value(self, grey_avail, coins_avail, econ_used, used_res, mode: int, min_code: int = 0) -> int:
         """Largest resource value still reachable, paying in canonical order (codes >= ``min_code``).
@@ -595,16 +609,16 @@ class GameState:
             return max([grey_avail[r] for r in range(min_code, 5)] + [0]) + coin_cap
         return sum(1 for r in range(min_code, 5) if grey_avail[r] > 0 and r not in used_res) + coin_cap
 
-    def _affordable(self) -> bool:
+    def _affordable(self, i: int) -> bool:
         grey_avail, coins_avail, value, econ_used, used_res = self._pay_state(())
         # With ``economy_forces_build`` False the doubled coin does not count towards the *mandatory*
         # construction check (BGG reading of "you can use"); it may still be spent once building.
         econ_used = econ_used or not self.rules.economy_forces_build
-        return self._max_value(grey_avail, coins_avail, econ_used, used_res, self._mode()) >= self._stage().cost
+        return self._max_value(grey_avail, coins_avail, econ_used, used_res, self._mode(i)) >= self._stage_at(i).cost
 
-    def _pay_options(self, chosen: Tuple[int, ...]) -> List[int]:
-        cost = self._stage().cost
-        mode = self._mode()
+    def _pay_options(self, i: int, chosen: Tuple[int, ...]) -> List[int]:
+        cost = self._stage_at(i).cost
+        mode = self._mode(i)
         grey_avail, coins_avail, value, econ_used, used_res = self._pay_state(chosen)
         need = cost - value
         min_code = chosen[-1] if chosen else 0
@@ -630,13 +644,13 @@ class GameState:
                 opts.append(A.PAY_COIN2)
         return opts
 
-    def _pay_decision(self, chosen: Tuple[int, ...]) -> bool:
-        opts = self._pay_options(chosen)
+    def _pay_decision(self, i: int, chosen: Tuple[int, ...]) -> bool:
+        opts = self._pay_options(i, chosen)
         if not opts:  # every offered step keeps a completion reachable, so this is an engine bug
-            raise RuntimeError(f"payment dead end: chosen={chosen} stage={self._stage()} cards={self.cards[self.mover]}")
-        return self._set_decision(D_PAY, chosen, opts)
+            raise RuntimeError(f"payment dead end: chosen={chosen} stage={self._stage_at(i)} cards={self.cards[self.mover]}")
+        return self._set_decision(D_PAY, (i, chosen), opts)
 
-    def _build(self, chosen: Tuple[int, ...]) -> None:
+    def _build(self, i: int, chosen: Tuple[int, ...]) -> None:
         m = self.mover
         for c in chosen:
             k = KIND_OF_RESOURCE[c] if c < 5 else COIN_KIND
@@ -644,11 +658,12 @@ class GameState:
             self.discard[k] += 1
             if c == PAY_COIN2_CODE:
                 self.econ_used = True
-        stage = self._stage()
-        self.stages[m] += 1
+        stage = self._stage_at(i)
+        assert i in self.available_stages(m), (i, self.built[m])
+        self.built[m] |= 1 << i
         if self.rules.economy_once_per_build:
             self.econ_used = False  # the doubled coin may be used again for another stage this turn
-        if self.stages[m] >= 5:
+        if self.built[m] == ALL_BUILT:
             self.wonder_done = True
         # push in reverse execution order: check <- architecture <- effect
         self._push(("check",))
@@ -730,8 +745,11 @@ class GameState:
                 return
             d = self._deck_of(action)
             self._push(("take", d, reason))
+        elif kind == D_STAGE:
+            self._push(("pay", action - A.STAGE_BASE, ()))
         elif kind == D_PAY:
-            chosen = tuple(ctx)
+            i, chosen = ctx
+            chosen = tuple(chosen)
             if A.PAY_BASE <= action < A.PAY_BASE + 5:
                 code = action - A.PAY_BASE
             elif action == A.PAY_COIN:
@@ -740,10 +758,10 @@ class GameState:
                 code = PAY_COIN2_CODE
             chosen = chosen + (code,)
             _, _, value, _, _ = self._pay_state(chosen)
-            if value >= self._stage().cost:
-                self._build(chosen)
+            if value >= self._stage_at(i).cost:
+                self._build(i, chosen)
             else:
-                self._push(("pay", chosen))
+                self._push(("pay", i, chosen))
         elif kind == D_SCIENCE:
             m = self.mover
             if action == A.SCI_TRIPLE:
@@ -834,7 +852,8 @@ class GameState:
                  f"faceup tokens {[TOKENS[t].name for t in self.faceup]} stack {self.prog_stack}"]
         for p in (0, 1):
             w = WONDERS[self.wonder[p]]
-            lines.append(f"  P{p} {w.name} stages {self.stages[p]}/5 score {self.score_of(p)} shields {self.shields_of(p)} "
+            built = [w.stages[i].label() for i in range(NUM_STAGES) if (self.built[p] >> i) & 1]
+            lines.append(f"  P{p} {w.name} stages {self.num_stages(p)}/5 {built} score {self.score_of(p)} shields {self.shields_of(p)} "
                          f"mil {self.mil_tokens[p]} tokens {[TOKENS[i].name for i, c in enumerate(self.tokens[p]) for _ in range(c)]}")
             lines.append(f"     cards: {describe_counts(self.cards[p])}")
         for d in range(3):

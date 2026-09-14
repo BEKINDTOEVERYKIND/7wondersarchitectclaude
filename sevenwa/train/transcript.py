@@ -8,7 +8,7 @@ from ..agents.base import Agent
 from ..engine.actions import Actions as A
 from ..engine.cards import KINDS, describe_counts
 from ..engine.env import Environment
-from ..engine.state import CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_PICK, D_SCIENCE, D_TOKEN, GameState
+from ..engine.state import CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_STAGE, D_PAY, D_PICK, D_SCIENCE, D_TOKEN, GameState
 from ..engine.tokens import TOKENS
 from ..engine.wonders import WONDERS
 
@@ -33,7 +33,8 @@ def _table(s: GameState) -> str:
 def _player(s: GameState, p: int) -> str:
     w = WONDERS[s.wonder[p]]
     toks = [TOKENS[i].name for i, c in enumerate(s.tokens[p]) for _ in range(c)]
-    return (f"P{p} {w.name} stage {s.stages[p]}/5  score {s.score_of(p):2d}  shields {s.shields_of(p)}  "
+    built = ",".join(w.stages[i].label() for i in range(5) if (s.built[p] >> i) & 1) or "-"
+    return (f"P{p} {w.name} stages {s.num_stages(p)}/5 [{built}]  score {s.score_of(p):2d}  shields {s.shields_of(p)}  "
             f"mil {s.mil_tokens[p]}  cat {'yes' if s.cat == p else 'no'}  tokens {toks}\n"
             f"       cards: {describe_counts(s.cards[p]) or '-'}")
 
@@ -44,8 +45,12 @@ def _decision_context(s: GameState) -> str:
         reason, optional, avail = s.dctx
         return f"pick a card ({reason}{', optional' if optional else ''})"
     if k == D_PAY:
-        st = WONDERS[s.wonder[s.mover]].stages[s.stages[s.mover]]
-        return f"pay for stage {s.stages[s.mover] + 1} ({st.cost} {'identical' if st.kind == 0 else 'different'}), paid so far {list(s.dctx)}"
+        si, chosen = s.dctx
+        st = WONDERS[s.wonder[s.mover]].stages[si]
+        return f"pay for stage {st.label()} ({st.cost} {'identical' if st.kind == 0 else 'different'}, {st.vp} VP), paid so far {list(chosen)}"
+    if k == D_STAGE:
+        w = WONDERS[s.wonder[s.mover]]
+        return f"choose which affordable stage to construct: {[w.stages[i].label() for i in s.dctx]}"
     if k == D_SCIENCE:
         return "choose which science set to convert"
     if k == D_TOKEN:

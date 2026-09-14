@@ -12,7 +12,7 @@ from sevenwa.toygame import RaceState
 from sevenwa.train.elo import expected, fit_elo
 from sevenwa.train.pipeline import evaluate_agents
 
-from conftest import K, check, edit, first_pick, give_many, set_top, settle, W  # noqa: E402  (tests/conftest.py)
+from conftest import K, check, edit, first_n, first_pick, give_many, set_top, settle, W  # noqa: E402  (tests/conftest.py)
 
 
 def test_olympia_takes_both_cards_before_the_mandatory_build():
@@ -20,13 +20,13 @@ def test_olympia_takes_both_cards_before_the_mandatory_build():
     (opponent deck).  Stage 3 needs 3 different: with wood + stone + the leftover papyrus the build is
     affordable only once BOTH cards have landed, and the payment must be able to use either card."""
     c = edit(first_pick(W.Olympia, W.Giza))
-    c.stages[0] = 1
+    c.built[0] = first_n(1)
     give_many(c, 0, [K.clay, K.clay, K.papyrus])
     set_top(c, 0, K.wood)
     set_top(c, 1, K.stone)
     s = settle(check(c))  # resolve the reveal chance nodes after the two Olympia draws
     # stage 2 auto-built, both Olympia cards placed, then stage 3 (3 different) built with wood+stone+papyrus
-    assert s.stages[0] == 3, s.describe()
+    assert s.num_stages(0) == 3, s.describe()
     assert s.cards[0][K.wood] == 0 and s.cards[0][K.stone] == 0 and s.cards[0][K.papyrus] == 0
 
 
@@ -88,22 +88,23 @@ def test_factory_respects_caller_simulations():
 
 
 def test_architecture_cannot_fire_twice_through_a_stage_effect_card():
-    """Ephesus: stage 1 (2 different) built with wood+stone -> the stage effect draws a central card;
-    if that card completes stage 2 (2 identical) the second build must NOT queue a second
+    """Ephesus: S2 (2 identical, effect) built with stone+stone -> the stage effect draws a central card;
+    if that card completes S4 (3 identical) the second build must NOT queue a second
     Architecture pick in the same turn (each Progress token once per turn)."""
     from sevenwa.engine.state import C_DRAW_CENTRAL, D_PICK
     c = edit(first_pick(W.Ephesus, W.Giza))
-    give_many(c, 0, [K.wood, K.stone, K.clay])
+    c.built[0] = first_n(1)
+    give_many(c, 0, [K.stone, K.stone, K.clay, K.clay])
     from conftest import give_token, T
     give_token(c, 0, T.Architecture)
     s = check(c)
-    assert s.dkind == D_PAY  # three greys for "2 different": a real payment choice
-    s = s.apply_action(A.PAY_BASE + 0).apply_action(A.PAY_BASE + 1)  # wood + stone, keep the clay
-    assert s.stages[0] == 1 and s.is_chance() and s.ckind == C_DRAW_CENTRAL, s.describe()  # Ephesus draw
-    s = s.apply_chance(K.clay)  # clay x2 -> stage 2 built at once
-    assert s.stages[0] == 2
+    assert s.dkind == D_PAY and s.dctx[0] == 1  # stones or clays for "2 identical": a real payment choice
+    s = s.apply_action(A.PAY_BASE + 1)  # stone (the second stone is forced), keep the clays
+    assert s.num_stages(0) == 2 and s.is_chance() and s.ckind == C_DRAW_CENTRAL, s.describe()  # Ephesus draw
+    s = s.apply_chance(K.clay)  # clay x3 -> S4 (3 identical) built at once
+    assert s.num_stages(0) == 3 and (s.built[0] >> 3) & 1
     offers = 0
-    while s.to_move() == 0 and not s.is_terminal():
+    while not s.is_terminal() and (s.is_chance() or s.to_move() == 0):  # S4's own Ephesus draw comes first
         if s.is_chance():
             s = s.apply_chance(s.chance_outcomes()[0][0])
             continue

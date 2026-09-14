@@ -136,6 +136,18 @@ def is_main_pick_of(s: GameState, player: int) -> bool:
 
 
 # --------------------------------------------------------------------------- scenario editing
+def first_n(n: int) -> int:
+    """Built-mask with the first ``n`` stages (in cost order) constructed.  For every Wonder such a
+    prefix is closed under the prerequisites, so it is a legal position."""
+    return (1 << n) - 1
+
+
+def set_stages(s: GameState, p: int, n: int) -> GameState:
+    """Give player ``p`` the first ``n`` stages (cost order) of their Wonder."""
+    s.built[p] = first_n(n)
+    return s
+
+
 def edit(s: GameState) -> GameState:
     """A private copy that may be edited freely before :func:`run` (or stepped as-is)."""
     c = s._copy()
@@ -389,8 +401,10 @@ def assert_node_sane(s: GameState) -> None:
         assert s.to_move() in (0, 1) and not s.is_chance() and not s.is_terminal()
         assert s.chance_outcomes() == ()
         if s.dkind == D_PAY:
-            cost = s._stage().cost
-            value = s._pay_state(tuple(s.dctx))[2]
+            si, chosen = s.dctx
+            assert si in s.available_stages(s.mover), "paying for a stage that is not available"
+            cost = s._stage_at(si).cost
+            value = s._pay_state(tuple(chosen))[2]
             assert value < cost, "payment decision after the cost was already covered"
             for a in legal:
                 inc = 2 if a == A.PAY_COIN2 else 1
@@ -424,7 +438,12 @@ def assert_invariants(s: GameState, comp: Optional[List[int]] = None) -> None:
     assert_deck_sizes(s)
     assert_node_sane(s)
     assert 0 <= s.conflict <= s.rules.conflict_tokens
-    assert all(0 <= x <= 5 for x in s.stages)
+    assert all(0 <= x <= 31 for x in s.built)
+    for p in (0, 1):  # every built stage had its prerequisites built
+        w = WONDERS[s.wonder[p]]
+        for st in w.stages:
+            if (s.built[p] >> st.index) & 1:
+                assert (s.built[p] & st.prereq_mask) == st.prereq_mask, (w.name, st.index, s.built[p])
     assert all(c >= 0 for p in (0, 1) for c in s.cards[p])
     assert all(c >= 0 for c in s.discard)
 

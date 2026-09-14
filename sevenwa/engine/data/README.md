@@ -4,31 +4,32 @@ These JSON files are the *only* place where card counts, Wonder stages and Progr
 are defined.  Edit them to correct the game data without touching code.
 
 * `decks.json`   – composition of the 7 Wonder decks (25 cards each) and the central deck (60).
-* `wonders.json` – the 5 stages of each Wonder: cost, VP, effect.
+* `wonders.json` – the 5 stages of each Wonder: cost, VP, effect and construction prerequisites.
 * `tokens.json`  – the 15 Progress tokens.
 
 Provenance is recorded in `docs/RULES.md` (§1.2, §5.2, §6.1, §11) and repeated in the `_status` /
-`_note` strings of each file (keys starting with `_` are ignored by the loaders).  Two research
-passes were made from search-engine relays only — the rulebook PDF and the BGG card-distribution
-attachment were never fetchable (last pass 2026-09-13; verdicts: 21 CONFIRMED, 12 SINGLE-SOURCE,
-14 UNKNOWN):
+`_note` strings of each file (keys starting with `_` are ignored by the loaders).
 
-* **CONFIRMED** (two independent sources, or mirrored rulebook text): deck sizes; the 14 card
-  kinds (every red card = 1 shield + 0/1/2 horns); standard Wonder deck 3 coins / Alexandria 4;
-  every Wonder's effect wording; effect counts Rhodes 2, Babylon 2, Ephesus 3 (one dissent), Giza 0;
-  all 15 tokens' names, texts and values (Science wording and the Urbanism / Crafts / Jewellery
-  resource splits included).
-* **SINGLE-SOURCE** (one page or one BGG post): Alexandria +1 gear −1 glass −1 one-horn and Giza
-  2 one-horn / 0 two-horn (BoostYourPlay); the Wonder VP totals 30/26/25/24/22/22/20 and the
-  effect counts of Olympia / Alexandria / Halicarnassus (BGG thread 2943868); Rhodes effects on
-  stages 2 and 4 (BGG thread 2869259); game-wide proportions incl. BGA "over 11 % cat cards".
-* **ASSUMED** (placeholders, internally consistent): all other per-deck counts — including the
-  blue split 1 × 3 VP / 3 × 2 VP + cat per Wonder deck, re-fitted so that 27 of 235 cards (11.5 %)
-  carry a cat icon — and the whole central deck; every per-stage cost order, VP split and effect
-  placement in `wonders.json` (Giza may have fewer "identical" stages).  Nothing in `tokens.json`
-  remains assumed.
+**Status (2026-09-14): every value in the three files is CONFIRMED.**  Two research passes from
+search-engine relays (2026-09-13) confirmed the deck sizes, the 14 card kinds, the token texts and
+values, the Wonder effect wordings and effect counts; the exact per-deck card counts and the
+per-stage Wonder data were then supplied from the physical components (the printed card-distribution
+table and the seven Wonder boards, read from the publisher's component image for Alexandria and
+component photographs for the other six).
 
-To fill the gaps with normal internet access: BGG file 233664 / image 6620199 (the per-deck card
-table, mirrored at bgmanual.com) and page 6 of the official EN rulebook PDF on
-cdn.svc.asmodee.net (the Wonder trays).  Each Wonder deck must still sum to 25 and the central
-deck to 60; changing any value invalidates trained checkpoints.
+* `decks.json` — `standard_wonder_deck` is the *modal* count of each kind over the seven decks;
+  `wonder_deck_overrides[<Wonder>]` lists only the kinds where that deck differs (the `_note`
+  spells out every full deck).  Totals: 235 cards; 17 of each resource; 27 coins; 24 two-VP cat
+  cards; 16 three-VP cards; 14 of each science symbol; red cards 18 / 15 / 8 with 0 / 1 / 2 horns.
+* `wonders.json` — stages are listed in a fixed **cost order** S1..S5 = 2 different, 2 identical,
+  3 different, 3 identical, 4 different (the printed costs are the same for all seven Wonders).
+  This is *not* the construction order: each stage's `requires` lists the stage indexes (0-based)
+  that must already be built, exactly as the tray diagrams show — Alexandria and Giza are linear,
+  Babylon `S1>S2>S3>{S4,S5}`, Ephesus `S1>{S2,S3,S4}>S5`, Halicarnassus `S1>S2>{S3,S4}>S5`,
+  Olympia `S1>{S2,S3}>S4>S5`, Rhodes `{S1,S2}>S3>S4>S5`.  A stage with the effect carries the
+  Wonder's effect id; totals 30 / 26 / 25 / 24 / 22 / 22 / 20.  Babylon's 2-identical stage prints
+  0 VP; Rhodes' first shield is on its 2-different foundation.
+* `tokens.json` — unchanged since the second research pass (all 14 types, Culture × 2).
+
+Each Wonder deck must still sum to 25 and the central deck to 60 (`tests/test_engine.py::TestData`
+pins the sums and the Wonder tables); changing any value invalidates trained checkpoints.

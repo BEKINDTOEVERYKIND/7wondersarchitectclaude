@@ -18,6 +18,8 @@ from sevenwa.engine.state import (CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_
                                   DECISION_NAMES, GameState)
 from sevenwa.engine.tokens import TOKEN_BY_NAME
 from sevenwa.engine.wonders import WONDER_BY_NAME
+
+from conftest import first_n  # noqa: E402  (tests/conftest.py)
 from sevenwa.train.arena import play_match
 
 K = KIND_BY_NAME
@@ -60,7 +62,7 @@ def _p0_with_cards(counts, stage: int = 0, tokens=()):
         s = s.apply_chance(s.chance_outcomes()[0][0])
     assert s.to_move() == 0 and s.dkind == D_PICK
     t = s._copy()
-    t.stages[0] = stage
+    t.built[0] = first_n(stage)
     for name, c in counts.items():
         k = K[name].id
         assert t.unseen[CENTRAL][k] >= c, name
@@ -225,7 +227,7 @@ def test_fifth_stage_completion_depends_on_winning():
     def make(opp_blue: int) -> GameState:
         t = base._copy()
         t._legal = base._legal  # _copy() drops the cached legal list (as Environment.observe restores it)
-        t.stages = [4, 0]
+        t.built = [first_n(4), 0]
         for name in ("wood", "stone", "clay"):
             t.cards[0][K[name].id] = 1
         t.cards[1][K["civ3"].id] = opp_blue
@@ -275,7 +277,7 @@ def test_payment_prefers_spending_useless_grey_over_coins():
     ]
     for stage, hand, acceptable in cases:
         t = _p0_with_cards(hand, stage=stage)
-        assert t.dkind == D_PAY and t.dctx == (), (stage, hand, t.describe())
+        assert t.dkind == D_PAY and t.dctx[1] == (), (stage, hand, t.describe())
         legal = list(t.legal_actions())
         greys = [a for a in legal if A.PAY_BASE <= a < A.PAY_BASE + 5]
         assert greys and A.PAY_COIN in legal, (stage, hand, legal)
@@ -306,7 +308,7 @@ def test_payment_choice_accounts_for_the_canonical_code_order():
     s = t
     while s.to_move() == 0 and s.dkind == D_PAY:
         s = s.apply_action(heuristic_action(s, None, P))
-    assert s.stages[0] == 2, s.describe()
+    assert s.num_stages(0) == 2, s.describe()
 
 
 def test_prior_temperature_controls_sharpness():

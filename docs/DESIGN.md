@@ -78,11 +78,14 @@ resolves them by sampling.  Consequences:
 
 ### 2.3 Network (`sevenwa/nn`)
 
-Input is a mover-centric fixed vector (~400 floats): both players' wonder, built stages,
-next-stage requirement, resource/wild counts, blue points, science symbols, progress
-tokens, shields, war tokens, cat; per-deck top-card features and the **unseen-multiset
-histogram** of each deck (so the net can reason about draw odds); face-up and unseen
-progress tokens; conflict-token state; pending decision type; turn counter.
+Input is a mover-centric fixed vector (581 floats): both players' wonder, the five stages
+each flagged built / available / affordable-now together with their cost, kind, VP and
+effect (the Wonders are dependency *graphs*, not ladders — Rhodes may start with either
+foundation, Ephesus opens three stages at once), resource/wild counts, blue points, science
+symbols, progress tokens, shields, war tokens, cat; per-deck top-card features and the
+**unseen-multiset histogram** of each deck (so the net can reason about draw odds); face-up
+and unseen progress tokens; conflict-token state; pending decision type (including the
+stage-choice decision and the stage being paid for); turn counter.
 
 Trunk: residual MLP (6 × 512, LayerNorm + GELU) — fast on CPU.  An attention variant
 (entities = players, decks, tokens) is provided for larger runs.

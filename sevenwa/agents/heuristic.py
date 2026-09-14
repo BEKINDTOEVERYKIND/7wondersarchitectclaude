@@ -45,7 +45,7 @@ import numpy as np
 
 from ..engine.actions import Actions as A
 from ..engine.cards import BLUE, COIN_KIND, KINDS, KIND_OF_RESOURCE, KIND_OF_SYMBOL, NUM_KINDS, RED
-from ..engine.state import (CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_PICK, D_SCIENCE, D_TOKEN, GameState)
+from ..engine.state import (CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_PICK, D_SCIENCE, D_STAGE, D_TOKEN, GameState)
 from ..engine.tokens import (K_CULTURE, K_ECONOMY, K_ENGINEERING, K_EXTRA_ON_BUILD, K_EXTRA_ON_GREEN,
                              K_EXTRA_ON_HORN, K_EXTRA_ON_RESOURCE, K_SHIELDS, K_VP_CAT, K_VP_MIL, K_VP_PROG,
                              K_VP_WONDER, NUM_TOKEN_TYPES, TOKENS)
@@ -83,19 +83,6 @@ _EDU_VP = sum(TOKENS[t].vp for t in _EDU_IDS)
 _POL_VP = sum(TOKENS[t].vp for t in _POL_IDS)
 _DECOR_BONUS = sum(TOKENS[t].vp_complete - TOKENS[t].vp_incomplete for t in _DECOR_IDS)
 
-# per wonder: cumulative stage VP (index i = VP of stages < i) and remaining cost (index i = cost of stages >= i)
-_STAGE_VP_CUM: List[List[int]] = []
-_REMAIN_COST: List[List[int]] = []
-for _w in WONDERS:
-    cum = [0]
-    for _s in _w.stages:
-        cum.append(cum[-1] + _s.vp)
-    _STAGE_VP_CUM.append(cum)
-    rem = [0] * 6
-    for _i in range(4, -1, -1):
-        rem[_i] = rem[_i + 1] + _w.stages[_i].cost
-    _REMAIN_COST.append(rem)
-
 _NEG = -1e9
 
 
@@ -124,6 +111,7 @@ class HeuristicParams:
     sci_phi1: float = 0.35           # potential of one symbol (fraction of a token)
     sci_phi2: float = 0.62           # potential of two different symbols
     sci_token_factor: float = 0.9    # discount of the best available token (it may be gone later)
+    green_early_bonus: float = 0.0   # extra value of a green card, scaled by turns_left / max_turns (early position)
     # --- progress tokens
     tok_extra_scale: float = 0.9     # scale of extra-card tokens (uncertainty / time); A/B-tuned (was 0.6)
     builds_per_turn: float = 0.35    # expected stage completions per remaining turn
@@ -150,6 +138,7 @@ class HeuristicParams:
     mil_step_discount: float = 0.8   # per additional shield still needed
     future_battle_weight: float = 0.5  # weight of battles after the next one (permanent shields only)
     perm_shield_bonus: float = 0.4   # hornless shields survive battles
+    early_horn_discount: float = 0.0  # horn cards are worth (1 - d * turns_left / max_turns) of their battle value
     # --- denial / lookahead
     deny: float = 0.55               # weight of the opponent's best reply (visible cards)
     deny_reveal: float = 0.3         # weight of the expected value of the card my pick reveals to them
@@ -168,9 +157,16 @@ _DEFAULT = HeuristicParams()
 
 
 # --------------------------------------------------------------------------- per-player view
+class _Target:
+    """One constructible stage of a player's Wonder, valued against the player's current holdings."""
+    __slots__ = ("idx", "stage", "cost", "vp", "effect", "mode", "deficit", "left_grey", "left_coins", "left_max",
+                 "next_cost", "next_mode", "next_deficit")
+
+
 class _View:
     __slots__ = ("p", "grey", "coins", "toks", "used", "eng", "econ", "n_tokens", "sci", "shields", "perm_shields", "mil",
-                 "score", "cat_cards", "stage_idx", "cost", "vp", "effect", "mode", "max_grey", "deficit",
+                 "score", "cat_cards", "w", "built", "n_built", "stages_left", "targets", "tgt",
+                 "cost", "vp", "effect", "mode", "max_grey", "deficit",
                  "left_grey", "left_coins", "left_max", "next_cost", "next_mode", "next_deficit", "cards_needed",
                  "strat", "edu", "has_decor", "has_pol")
 
@@ -264,9 +260,11 @@ def _make_view(s: GameState, p: int) -> _View:
         cat_cards += cards[k]
     v.cat_cards = cat_cards
     # score (same bookkeeping as GameState.score_of, inlined for speed)
-    w = s.wonder[p]
-    si = s.stages[p]
-    score = _STAGE_VP_CUM[w][si]
+    w = WONDERS[s.wonder[p]]
+    built = s.built[p]
+    v.w = w
+    v.built = built
+    score = w.vp_of_built(built)
     for k in _BLUE_KINDS:
         score += cards[k] * _KVP[k]
     score += v.mil * s.rules.military_token_vp
@@ -275,40 +273,43 @@ def _make_view(s: GameState, p: int) -> _View:
     if s.cat == p:
         score += s.rules.cat_vp
     v.score = score
-    v.stage_idx = si
-    if si < 5:
-        st = WONDERS[w].stages[si]
-        cost = st.cost
-        v.cost = cost
-        v.vp = st.vp
-        v.effect = st.effect
-        mode = 2 if v.eng else (0 if st.kind == IDENTICAL else 1)
-        v.mode = mode
-        v.max_grey = max(grey)
-        mv = _maxval(grey, v.coins, v.econ, mode)
-        v.deficit = cost - mv if mv < cost else 0
-        lg, lc = _leftover(grey, v.coins, cost, mode)
-        v.left_grey = lg
-        v.left_coins = lc
-        v.left_max = max(lg)
-        if si + 1 < 5:
-            nst = WONDERS[w].stages[si + 1]
-            nmode = 2 if v.eng else (0 if nst.kind == IDENTICAL else 1)
-            v.next_cost = nst.cost
-            v.next_mode = nmode
-            nmv = _maxval(lg, lc, v.econ, nmode)
-            v.next_deficit = nst.cost - nmv if nmv < nst.cost else 0
-        else:
-            v.next_cost = 0
-            v.next_mode = -1
-            v.next_deficit = 0
-        v.cards_needed = v.deficit + _REMAIN_COST[w][si + 1]
+    n_built = 0
+    for i in range(5):
+        if (built >> i) & 1:
+            n_built += 1
+    v.n_built = n_built
+    v.stages_left = 5 - n_built
+    v.max_grey = max(grey)
+    # every stage the player may construct next is a *target*; the primary target (``v.tgt``) is the
+    # one closest to affordable (ties: cheaper, then more VP, then lower index)
+    targets: List[_Target] = []
+    for i in w.available(built):
+        targets.append(_make_target(v, w, i, built))
+    v.targets = targets
+    if targets:
+        best = targets[0]
+        for tg in targets[1:]:
+            if (tg.deficit, tg.cost, -tg.vp, tg.idx) < (best.deficit, best.cost, -best.vp, best.idx):
+                best = tg
+        v.tgt = best
+        v.cost = best.cost
+        v.vp = best.vp
+        v.effect = best.effect
+        v.mode = best.mode
+        v.deficit = best.deficit
+        v.left_grey = best.left_grey
+        v.left_coins = best.left_coins
+        v.left_max = best.left_max
+        v.next_cost = best.next_cost
+        v.next_mode = best.next_mode
+        v.next_deficit = best.next_deficit
+        v.cards_needed = best.deficit + w.cost_remaining(built) - best.cost
     else:
+        v.tgt = None
         v.cost = 0
         v.vp = 0
         v.effect = ""
         v.mode = 2
-        v.max_grey = max(grey)
         v.deficit = 0
         v.left_grey = grey
         v.left_coins = v.coins
@@ -318,6 +319,40 @@ def _make_view(s: GameState, p: int) -> _View:
         v.next_deficit = 0
         v.cards_needed = 0
     return v
+
+
+def _make_target(v: _View, w, i: int, built: int) -> _Target:
+    """Value stage ``i`` (available) against the holdings in ``v``; the *next* stage is the first of the
+    greedy plan after ``i`` is built."""
+    tg = _Target()
+    st = w.stages[i]
+    tg.idx = i
+    tg.stage = st
+    cost = st.cost
+    tg.cost = cost
+    tg.vp = st.vp
+    tg.effect = st.effect
+    mode = 2 if v.eng else (0 if st.kind == IDENTICAL else 1)
+    tg.mode = mode
+    mv = _maxval(v.grey, v.coins, v.econ, mode)
+    tg.deficit = cost - mv if mv < cost else 0
+    lg, lc = _leftover(v.grey, v.coins, cost, mode)
+    tg.left_grey = lg
+    tg.left_coins = lc
+    tg.left_max = max(lg)
+    plan = w.plan(built | (1 << i))
+    if plan:
+        nst = w.stages[plan[0]]
+        nmode = 2 if v.eng else (0 if nst.kind == IDENTICAL else 1)
+        tg.next_cost = nst.cost
+        tg.next_mode = nmode
+        nmv = _maxval(lg, lc, v.econ, nmode)
+        tg.next_deficit = nst.cost - nmv if nmv < nst.cost else 0
+    else:
+        tg.next_cost = 0
+        tg.next_mode = -1
+        tg.next_deficit = 0
+    return tg
 
 
 # --------------------------------------------------------------------------- military helpers
@@ -436,28 +471,16 @@ class _Ctx:
         self._T: List[float] = [0.0, 0.0]
         self._tok_ready = [False, False]
         self._cardvals: List[Optional[List[float]]] = [None, None]
-        self._build: List[Optional[Tuple[float, float]]] = [None, None]
+        self._build: List[dict] = [{}, {}]
         self._ends: List[Optional[List[bool]]] = [None, None]
 
     # ---- stage construction ------------------------------------------------------------
-    def build_value(self, p: int) -> Tuple[float, float]:
-        """``(plain, total)`` value of completing player ``p``'s current stage right now.
-
-        ``plain`` = stage VP + tempo + stage effect (+ Architecture pick); ``total`` adds the
-        win bonus / loss penalty when it is the 5th stage (the game ends at once).
-        """
-        b = self._build[p]
-        if b is not None:
-            return b
-        s, P = self.s, self.P
-        v = self.views[p]
-        o = self.views[1 - p]
-        if v.stage_idx >= 5:
-            b = (0.0, 0.0)
-            self._build[p] = b
-            return b
+    def plain_value(self, p: int, stage) -> float:
+        """Value of constructing ``stage`` (an engine ``Stage``) for player ``p``: printed VP + tempo +
+        the stage effect.  Independent of the player's holdings."""
+        P = self.P
         extra = P.extra_card_value
-        eff = v.effect
+        eff = stage.effect
         if eff == E_SHIELD:
             effv = self.perm_shield_value(p)
         elif eff == E_ANY_DECK:
@@ -472,19 +495,55 @@ class _Ctx:
             effv = self.best_token(p)
         else:
             effv = 0.0
-        plain = P.w_stage_vp * v.vp + P.tempo_bonus + effv
+        return P.w_stage_vp * stage.vp + P.tempo_bonus + effv
+
+    def build_value(self, p: int, tg: Optional[_Target] = None) -> Tuple[float, float]:
+        """``(plain, total)`` value of completing target ``tg`` (default: the primary target) of player
+        ``p`` right now.
+
+        ``plain`` = stage VP + tempo + stage effect (+ Architecture pick); ``total`` adds the
+        win bonus / loss penalty when it is the 5th stage (the game ends at once).
+        """
+        v = self.views[p]
+        if tg is None:
+            tg = v.tgt
+        if tg is None:
+            return (0.0, 0.0)
+        cache = self._build[p]
+        b = cache.get(tg.idx)
+        if b is not None:
+            return b
+        s, P = self.s, self.P
+        o = self.views[1 - p]
+        extra = P.extra_card_value
+        eff = tg.effect
+        if eff == E_SHIELD:
+            effv = self.perm_shield_value(p)
+        elif eff == E_ANY_DECK:
+            effv = extra
+        elif eff == E_CENTRAL:
+            effv = extra * 0.85
+        elif eff == E_LEFT_RIGHT:
+            effv = extra * 1.6
+        elif eff == E_LOOK5:
+            effv = extra * 1.3
+        elif eff == E_TOKEN:
+            effv = self.best_token(p)
+        else:
+            effv = 0.0
+        plain = P.w_stage_vp * tg.vp + P.tempo_bonus + effv
         for t in _ARCH_IDS:
             if v.toks[t] and not (v.used >> t) & 1:
                 plain += extra
         total = plain
-        if v.stage_idx == 4:
-            final = v.score + v.vp + (_DECOR_BONUS if v.has_decor else 0)
+        if v.n_built == 4:
+            final = v.score + tg.vp + (_DECOR_BONUS if v.has_decor else 0)
             if final > o.score or (final == o.score and s.rules.tiebreak_stages):
                 total += P.win_bonus
             else:
                 total -= P.lose_penalty
         b = (plain, total)
-        self._build[p] = b
+        cache[tg.idx] = b
         return b
 
     def ends_game(self, p: int) -> Optional[List[bool]]:
@@ -504,7 +563,7 @@ class _Ctx:
         tl = self.tl
         pb = self.pb
         extra = P.extra_card_value * P.tok_extra_scale
-        stages_left = 5 - v.stage_idx
+        stages_left = v.stages_left
         fb = P.builds_per_turn * tl
         if fb > stages_left:
             fb = float(stages_left)
@@ -567,17 +626,25 @@ class _Ctx:
         self._tok_ready[p] = True
         # a token that makes the current stage affordable right now triggers the mandatory build
         # (applied after T/blind are published so build_value -> best_token cannot recurse)
-        if v.stage_idx < 5 and v.deficit > 0:
-            imm = None
-            if not v.eng and _maxval(v.grey, v.coins, v.econ, 2) >= v.cost:
-                imm = P.tok_immediate_build * self.build_value(p)[1]
-                for t in _ENG_IDS:
-                    out[t] += imm
-            if not v.econ and v.coins >= 1 and v.deficit == 1:
-                if imm is None:
-                    imm = P.tok_immediate_build * self.build_value(p)[1]
-                for t in _ECON_IDS:
-                    out[t] += imm
+        imm_eng = 0.0
+        imm_econ = 0.0
+        for tg in v.targets:
+            if tg.deficit <= 0:
+                continue
+            if not v.eng and _maxval(v.grey, v.coins, v.econ, 2) >= tg.cost:
+                x = P.tok_immediate_build * self.build_value(p, tg)[1]
+                if x > imm_eng:
+                    imm_eng = x
+            if not v.econ and v.coins >= 1 and tg.deficit == 1:
+                x = P.tok_immediate_build * self.build_value(p, tg)[1]
+                if x > imm_econ:
+                    imm_econ = x
+        if imm_eng:
+            for t in _ENG_IDS:
+                out[t] += imm_eng
+        if imm_econ:
+            for t in _ECON_IDS:
+                out[t] += imm_econ
         return out
 
     def perm_shield_value(self, p: int, n: int = 1) -> float:
@@ -623,70 +690,80 @@ class _Ctx:
         vals = [0.0] * NUM_KINDS
 
         # ---- resources ------------------------------------------------------------------
-        if v.stage_idx < 5:
-            cost = v.cost
-            mode = v.mode
-            deficit = v.deficit
-            plain, build = self.build_value(p)
-            ends: Optional[List[bool]] = [False] * NUM_KINDS if v.stage_idx == 4 else None
-            U1 = P.res_unit * plain / cost
+        # A card is valued against every stage the player could construct next (Rhodes' two
+        # foundations, Ephesus' three middle stages...) and gets the best of those values.
+        if v.targets:
+            ends: Optional[List[bool]] = [False] * NUM_KINDS if v.n_built == 4 else None
             disc = P.res_discount
             late = P.pick_rate * tl
-            nmode = v.next_mode
-            nd = v.next_deficit
-            lg = v.left_grey
-            lmax = v.left_max
-            for r in range(5):
-                k = _RES_KIND[r]
-                g = v.grey[r]
-                if mode == 0:
-                    d = g + 1 > v.max_grey
-                elif mode == 1:
-                    d = g == 0
-                else:
-                    d = True
-                val = 0.0
-                if d and deficit > 0:
-                    if deficit <= 1:
+            best_res = [_NEG, _NEG, _NEG, _NEG, _NEG]  # a losing 5th stage has a *negative* build value
+            best_coin = _NEG
+            dc = 2 if (v.econ and v.coins == 0) else 1  # a fresh Economy coin counts double
+            for tg in v.targets:
+                cost = tg.cost
+                mode = tg.mode
+                deficit = tg.deficit
+                plain, build = self.build_value(p, tg)
+                U1 = P.res_unit * plain / cost
+                nmode = tg.next_mode
+                nd = tg.next_deficit
+                lg = tg.left_grey
+                lmax = tg.left_max
+                for r in range(5):
+                    g = v.grey[r]
+                    if mode == 0:
+                        d = g + 1 > v.max_grey
+                    elif mode == 1:
+                        d = g == 0
+                    else:
+                        d = True
+                    val = 0.0
+                    if d and deficit > 0:
+                        if deficit <= 1:
+                            val = build
+                            if ends is not None:
+                                ends[_RES_KIND[r]] = True
+                        else:
+                            da = deficit - 1
+                            val = U1 * disc ** (da - 1)
+                            if da > late:
+                                val *= P.late_stage_penalty
+                    elif nmode >= 0 and nd > 0:
+                        if nmode == 0:
+                            d2 = lg[r] + 1 > lmax
+                        elif nmode == 1:
+                            d2 = lg[r] == 0
+                        else:
+                            d2 = True
+                        if d2:
+                            tot = deficit + nd - 1
+                            val = U1 * P.future_stage_factor * disc ** tot
+                            if tot > late:
+                                val *= P.late_stage_penalty
+                    if val > best_res[r]:
+                        best_res[r] = val
+                # coins (wild)
+                if deficit > 0:
+                    if deficit <= dc:
                         val = build
                         if ends is not None:
-                            ends[k] = True
+                            ends[COIN_KIND] = True
                     else:
-                        da = deficit - 1
-                        val = U1 * disc ** (da - 1)
+                        da = deficit - dc
+                        val = U1 * dc * disc ** (da - 1)
                         if da > late:
                             val *= P.late_stage_penalty
-                elif nmode >= 0 and nd > 0:
-                    if nmode == 0:
-                        d2 = lg[r] + 1 > lmax
-                    elif nmode == 1:
-                        d2 = lg[r] == 0
-                    else:
-                        d2 = True
-                    if d2:
-                        tot = deficit + nd - 1
-                        val = U1 * P.future_stage_factor * disc ** tot
-                        if tot > late:
-                            val *= P.late_stage_penalty
+                    if val > best_coin:
+                        best_coin = val
+            for r in range(5):
+                val = best_res[r]
+                if val <= _NEG:
+                    val = 0.0
                 for t in _RESTOK_FOR_RES[r]:
                     if toks[t] and not (used >> t) & 1:
                         val += extra
-                vals[k] = val
-            # coins (wild; a fresh Economy coin counts double)
-            dc = 2 if (v.econ and v.coins == 0) else 1
-            if deficit > 0:
-                if deficit <= dc:
-                    val = build
-                    if ends is not None:
-                        ends[COIN_KIND] = True
-                else:
-                    da = deficit - dc
-                    val = U1 * dc * disc ** (da - 1)
-                    if da > late:
-                        val *= P.late_stage_penalty
-                val += P.coin_flex
-            else:
-                val = P.coin_flex
+                vals[_RES_KIND[r]] = val
+            val = (best_coin if best_coin > _NEG else 0.0) + P.coin_flex
             for t in _RESTOK_FOR_COIN:
                 if toks[t] and not (used >> t) & 1:
                     val += extra
@@ -718,9 +795,10 @@ class _Ctx:
             for t in _SCI_IDS:
                 if toks[t] and not (used >> t) & 1:
                     sci_extra += extra
-            vals[_SYM_KIND[0]] = _phi(c0 + 1, c1, c2, T, phi1, phi2) - base + sci_extra
-            vals[_SYM_KIND[1]] = _phi(c0, c1 + 1, c2, T, phi1, phi2) - base + sci_extra
-            vals[_SYM_KIND[2]] = _phi(c0, c1, c2 + 1, T, phi1, phi2) - base + sci_extra
+            early = P.green_early_bonus * tl / P.max_turns if P.green_early_bonus else 0.0
+            vals[_SYM_KIND[0]] = _phi(c0 + 1, c1, c2, T, phi1, phi2) - base + sci_extra + early
+            vals[_SYM_KIND[1]] = _phi(c0, c1 + 1, c2, T, phi1, phi2) - base + sci_extra + early
+            vals[_SYM_KIND[2]] = _phi(c0, c1, c2 + 1, T, phi1, phi2) - base + sci_extra + early
 
         # ---- red ------------------------------------------------------------------------
         sm, so = v.shields, o.shields
@@ -735,6 +813,11 @@ class _Ctx:
                 prop += extra
         gain_near = _mil_gain(v, o, sm, so, rules, P.mil_lookahead, P.mil_step_discount)
         perm_val = self.perm_shield_value(p) if pb > 0.0 else P.perm_shield_bonus
+        horn_scale = 1.0
+        if P.early_horn_discount:
+            horn_scale = 1.0 - P.early_horn_discount * tl / P.max_turns
+            if horn_scale < 0.0:
+                horn_scale = 0.0
         for k in _RED_KINDS:
             h = _KHORN[k]
             if h == 0:
@@ -751,7 +834,7 @@ class _Ctx:
                 if pb2 > P.pb_max:
                     pb2 = P.pb_max
                 val = pb * gain_near + (pb2 - pb) * o1
-            vals[k] = val + prop
+            vals[k] = val * horn_scale + prop
         self._cardvals[p] = vals
         return vals
 
@@ -922,10 +1005,16 @@ def _score_pay(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
     s, P = ctx.s, ctx.P
     m = s.mover
     v = ctx.views[m]
-    si = v.stage_idx
-    if si + 1 >= 5:  # the 5th stage ends the game: leftovers are worthless
+    si, chosen = s.dctx
+    if v.n_built + 1 >= 5:  # the 5th stage ends the game: leftovers are worthless
         return [P.pay_econ_bonus if a == A.PAY_COIN2 else 0.0 for a in legal]
-    chosen = s.dctx or ()
+    chosen = tuple(chosen or ())
+    tg = None
+    for x in v.targets:
+        if x.idx == si:
+            tg = x
+    if tg is None:  # defensive: the engine only pays for available stages
+        tg = _make_target(v, v.w, si, v.built)
     g = list(v.grey)
     c = v.coins
     econ = v.econ
@@ -944,8 +1033,8 @@ def _score_pay(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
             c -= 1
             value += 2
             econ = False
-    need = v.cost - value
-    mode = v.mode
+    need = tg.cost - value
+    mode = tg.mode
     last = chosen[-1] if chosen else -1
     min_code = last if last >= 0 else 0
     if mode == 0:
@@ -959,12 +1048,13 @@ def _score_pay(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
         hi = 5
     else:
         lo, hi = min_code, 5
-    w = s.wonder[m]
-    nst = WONDERS[w].stages[si + 1]
+    w = v.w
+    plan = w.plan(v.built | (1 << si))
+    nst = w.stages[plan[0]]
     nmode = 2 if v.eng else (0 if nst.kind == IDENTICAL else 1)
     ncost = nst.cost
-    if si + 2 < 5:
-        st2 = WONDERS[w].stages[si + 2]
+    if len(plan) > 1:
+        st2 = w.stages[plan[1]]
         mode2 = 2 if v.eng else (0 if st2.kind == IDENTICAL else 1)
         cost2 = st2.cost
     else:
@@ -1127,6 +1217,45 @@ def _score_hali_choose(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
     return [vme[a - A.HALI_BASE] for a in legal]
 
 
+def _score_stage(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
+    """Choose which of several affordable stages to construct.
+
+    An option is worth the stage itself (``build_value``: VP, tempo, effect, game end) plus what
+    the holdings left after paying it the cheapest way (``_leftover``) still cover of the stages
+    that follow in the greedy plan (the next stage at its per-card value, the one after with the
+    ``future_stage_factor`` weight).  Stages that are affordable *together* are usually built in
+    the same turn anyway (the mandatory check repeats), so the leftover term mostly decides the
+    order in which cards are consumed.
+    """
+    s, P = ctx.s, ctx.P
+    m = s.mover
+    v = ctx.views[m]
+    w = v.w
+    by_idx = {tg.idx: tg for tg in v.targets}
+    out = []
+    for a in legal:
+        i = a - A.STAGE_BASE
+        tg = by_idx.get(i)
+        if tg is None:  # defensive
+            tg = _make_target(v, w, i, v.built)
+        plain, total = ctx.build_value(m, tg)
+        val = total
+        lg, lc = _leftover(v.grey, v.coins, tg.cost, tg.mode)
+        plan = w.plan(v.built | (1 << i))
+        weight = 1.0
+        for j in plan[:2]:
+            st = w.stages[j]
+            nmode = 2 if v.eng else (0 if st.kind == IDENTICAL else 1)
+            mv = _maxval(lg, lc, v.econ, nmode)
+            if mv > st.cost:
+                mv = st.cost
+            val += weight * mv * P.res_unit * ctx.plain_value(m, st) / st.cost
+            lg, lc = _leftover(lg, lc, st.cost, nmode)
+            weight *= P.future_stage_factor
+        out.append(val)
+    return out
+
+
 # --------------------------------------------------------------------------- public API
 def score_actions(state: GameState, params: Optional[HeuristicParams] = None) -> Tuple[Sequence[int], List[float]]:
     """Return ``(legal_actions, scores)`` for the decision node ``state`` (VP-like units)."""
@@ -1150,6 +1279,8 @@ def score_actions(state: GameState, params: Optional[HeuristicParams] = None) ->
         scores = _score_hali_deck(ctx, legal)
     elif dk == D_HALI_CHOOSE:
         scores = _score_hali_choose(ctx, legal)
+    elif dk == D_STAGE:
+        scores = _score_stage(ctx, legal)
     else:  # pragma: no cover - unknown decision kind: stay legal
         scores = [0.0] * len(legal)
     return legal, scores

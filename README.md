@@ -32,14 +32,17 @@ sevenwa arena --a hybrid:runs/v1/ckpt/champion.pt:200:0.5 --b heuristic --games 
 
 ## Agent ladder (measured during development, see `docs/TRAINING.md`)
 
-`random` ≪ `heuristic` (A/B-tuned expert policy) ≈ `rollout:200:1` < `net:models/imitation_v3.pt:300`
-< `net:models/imitation_v5.pt:300` (imitation of the tuned heuristic, 384×5 network: 87.5 % vs the
-tuned heuristic) < **`net:models/expert_v6.pt:300`** (one round of expert iteration on 3 000
-search-play games: 25-15 head-to-head against v5, 66.7 % vs the heuristic in a 24-game sample).
-Deeper search helps these networks (600 simulations beat 150 by 62.5 %).
+The rules data was corrected on 2026-09-14 from the physical components (exact per-deck card
+counts, the seven Wonder boards with their stage dependency graphs).  Every network trained
+before that date (`imitation_v3`, `imitation_v5`, `expert_v6`; git history up to commit
+`bb15851`) used assumed data and an incompatible feature/action layout and was removed.
+Measured under the *old* data: `random` ≪ `heuristic` ≈ `rollout:200:1` < imitation networks
+< one round of expert iteration (62.5 % vs its teacher).  The ladder under the corrected rules
+is re-measured in `docs/TRAINING.md` as the retrained models are shipped.
 
 ```bash
-sevenwa play --ai net:models/expert_v6.pt:600         # play the strongest shipped agent
+sevenwa play --ai heuristic                            # the tuned expert policy, always available
+sevenwa play --ai net:models/<checkpoint>.pt:600      # a shipped network, when present in models/
 ```
 
 ## Layout
@@ -56,10 +59,13 @@ sevenwa/cli.py           `sevenwa pipeline | arena | selfplay | train | play | b
 tests/                   rules-fidelity, search, network and heuristic tests
 ```
 
-## Game data caveat
+## Game data
 
-Deck sizes, card types, Wonder point totals, Wonder effect types, progress-token effects and
-all 2-player rules were cross-checked against multiple sources (see `docs/RULES.md`).  The
-exact per-deck card counts and the per-stage cost/VP split of each Wonder could not be
-verified during development and are marked `ASSUMED` in `sevenwa/engine/data/*.json`;
-correct them there and everything (engine, features, tests) follows automatically.
+Deck sizes, card types, Wonder point totals and effects, progress-token effects and all
+2-player rules were cross-checked against multiple sources, and on 2026-09-14 the exact
+per-deck card distribution and the seven Wonder boards (per-stage VP, effect stages and the
+construction prerequisites printed on the trays) were entered from the physical components.
+Everything in `sevenwa/engine/data/*.json` is now marked `CONFIRMED`; see `docs/RULES.md` for
+the provenance of every item.  The engine models each Wonder as a dependency graph (Rhodes may
+start with either foundation, Babylon may build its 4-different stage before its 3-identical
+one, ...), with an explicit stage-choice decision when several stages are affordable.

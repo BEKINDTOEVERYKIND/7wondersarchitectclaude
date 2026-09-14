@@ -1,6 +1,6 @@
 {
-  "_status": "Effect wording per Wonder CONFIRMED (rulebook mirrors); effect counts Rhodes 2 / Babylon 2 / Giza 0 CONFIRMED, Ephesus 3 CONFIRMED (one dissenting review says 2); Olympia 2, Alexandria 2, Halicarnassus 2 and the VP totals 30/26/25/24/22/22/20 SINGLE-SOURCE (BGG thread 2943868); Rhodes effects on stages 2 and 4 SINGLE-SOURCE; per-stage VP split, per-stage cost order and the effect stages of Alexandria/Halicarnassus/Olympia/Ephesus/Babylon ASSUMED",
-  "_cost_pattern_note": "The SET of costs (2-4 cards, identical or different; first stage of most Wonders '2 different', upper stages up to 4) is CONFIRMED by several reviews; the per-Wonder ORDER is ASSUMED to be 2 different, 2 identical, 3 different, 3 identical, 4 different. Marketing copy says Giza 'allows you to build with fewer matching resource cards', so Giza may have fewer 'identical' stages.",
+  "_status": "CONFIRMED (user-supplied board data, 2026-09-14): per-stage printed VP, which stages carry the effect (star) and the construction prerequisites of all seven Wonders were read from the publisher's component image (Alexandria) and component photographs (the other six).  Totals 30/26/25/24/22/22/20.  Babylon's 2-identical stage really prints 0 VP; Rhodes' first shield is on its 2-different stage.",
+  "_stage_note": "Stages are listed in a fixed cost order S1..S5 = 2 different, 2 identical, 3 different, 3 identical, 4 different.  This is NOT the construction order: 'requires' lists the stage indexes (0-based) that must already be built.  Dependency structures: Alexandria & Giza S1>S2>S3>S4>S5; Babylon S1>S2>S3>{S4,S5}; Ephesus S1>{S2,S3,S4}>S5; Halicarnassus S1>S2>{S3,S4}>S5; Olympia S1>{S2,S3}>S4>S5; Rhodes {S1,S2}>S3>S4>S5.",
   "wonders": [
     {
       "name": "Giza",
@@ -10,31 +10,44 @@
           "cost": 2,
           "kind": "different",
           "vp": 4,
-          "effect": "none"
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
           "vp": 5,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "different",
           "vp": 6,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            1
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
           "vp": 7,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            2
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
           "vp": 8,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            3
+          ]
         }
       ]
     },
@@ -45,32 +58,44 @@
         {
           "cost": 2,
           "kind": "different",
-          "vp": 3,
-          "effect": "none"
+          "vp": 4,
+          "effect": "shield",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
           "vp": 4,
-          "effect": "shield"
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 3,
           "kind": "different",
           "vp": 5,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            0,
+            1
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
           "vp": 6,
-          "effect": "shield"
+          "effect": "shield",
+          "requires": [
+            2
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
-          "vp": 8,
-          "effect": "none"
+          "vp": 7,
+          "effect": "none",
+          "requires": [
+            3
+          ]
         }
       ]
     },
@@ -81,32 +106,45 @@
         {
           "cost": 2,
           "kind": "different",
-          "vp": 3,
-          "effect": "none"
+          "vp": 4,
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
-          "vp": 4,
-          "effect": "any_deck_card"
+          "vp": 3,
+          "effect": "any_deck_card",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "different",
-          "vp": 5,
-          "effect": "none"
+          "vp": 6,
+          "effect": "none",
+          "requires": [
+            1
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
-          "vp": 6,
-          "effect": "any_deck_card"
+          "vp": 5,
+          "effect": "any_deck_card",
+          "requires": [
+            2
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
           "vp": 7,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            3
+          ]
         }
       ]
     },
@@ -118,31 +156,45 @@
           "cost": 2,
           "kind": "different",
           "vp": 3,
-          "effect": "none"
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
-          "vp": 4,
-          "effect": "look_5_choose_1"
+          "vp": 3,
+          "effect": "look_5_choose_1",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "different",
-          "vp": 5,
-          "effect": "none"
+          "vp": 6,
+          "effect": "none",
+          "requires": [
+            1
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
           "vp": 5,
-          "effect": "look_5_choose_1"
+          "effect": "look_5_choose_1",
+          "requires": [
+            1
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
           "vp": 7,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            2,
+            3
+          ]
         }
       ]
     },
@@ -154,31 +206,45 @@
           "cost": 2,
           "kind": "different",
           "vp": 3,
-          "effect": "none"
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
-          "vp": 3,
-          "effect": "left_and_right_cards"
+          "vp": 2,
+          "effect": "left_and_right_cards",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "different",
           "vp": 5,
-          "effect": "none"
+          "effect": "none",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
           "vp": 5,
-          "effect": "left_and_right_cards"
+          "effect": "left_and_right_cards",
+          "requires": [
+            1,
+            2
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
-          "vp": 6,
-          "effect": "none"
+          "vp": 7,
+          "effect": "none",
+          "requires": [
+            3
+          ]
         }
       ]
     },
@@ -189,32 +255,47 @@
         {
           "cost": 2,
           "kind": "different",
-          "vp": 2,
-          "effect": "central_card"
+          "vp": 3,
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
-          "vp": 4,
-          "effect": "none"
+          "vp": 3,
+          "effect": "central_card",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "different",
           "vp": 4,
-          "effect": "central_card"
+          "effect": "central_card",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
-          "vp": 6,
-          "effect": "none"
+          "vp": 5,
+          "effect": "central_card",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
-          "vp": 6,
-          "effect": "central_card"
+          "vp": 7,
+          "effect": "none",
+          "requires": [
+            1,
+            2,
+            3
+          ]
         }
       ]
     },
@@ -226,31 +307,44 @@
           "cost": 2,
           "kind": "different",
           "vp": 3,
-          "effect": "none"
+          "effect": "none",
+          "requires": []
         },
         {
           "cost": 2,
           "kind": "identical",
-          "vp": 3,
-          "effect": "progress_token"
+          "vp": 0,
+          "effect": "progress_token",
+          "requires": [
+            0
+          ]
         },
         {
           "cost": 3,
           "kind": "different",
-          "vp": 4,
-          "effect": "none"
+          "vp": 5,
+          "effect": "none",
+          "requires": [
+            1
+          ]
         },
         {
           "cost": 3,
           "kind": "identical",
-          "vp": 4,
-          "effect": "progress_token"
+          "vp": 5,
+          "effect": "progress_token",
+          "requires": [
+            2
+          ]
         },
         {
           "cost": 4,
           "kind": "different",
-          "vp": 6,
-          "effect": "none"
+          "vp": 7,
+          "effect": "none",
+          "requires": [
+            2
+          ]
         }
       ]
     }
