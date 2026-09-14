@@ -170,7 +170,7 @@ def main(argv=None):
     s.add_argument("--epochs", type=float, default=1.0)
     s.add_argument("--lr", type=float, default=1e-3)
     s.add_argument("--weight-decay", type=float, default=1e-3)
-    s.add_argument("--gate-games", type=int, default=40)
+    s.add_argument("--gate-games", type=int, default=60)
     s.add_argument("--gate-threshold", type=float, default=0.55)
     s.add_argument("--gate-sims", type=int, default=100)
     s.add_argument("--eval-games", type=int, default=20)

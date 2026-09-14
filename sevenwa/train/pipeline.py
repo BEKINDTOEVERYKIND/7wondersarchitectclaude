@@ -49,7 +49,7 @@ class PipelineConfig:
     net_dropout: float = 0.1
     selfplay: SelfPlayConfig = field(default_factory=SelfPlayConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
-    gate_games: int = 40
+    gate_games: int = 60
     gate_threshold: float = 0.55
     gate_simulations: int = 100
     eval_games: int = 20

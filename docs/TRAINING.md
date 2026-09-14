@@ -185,6 +185,31 @@ and simply more games per generation.  On this 4-core box the reliable strength 
 the imitation bootstrap, so `models/imitation_v3.pt` remains the shipped agent; a larger
 imitation run (`runs/v4`: 40 000 games, 384×5 network) is the next rung.
 
+### Value calibration, search parameters and the teacher (second session)
+
+* **Calibration.** On 90 000 held-out imitation positions the value head is over-confident:
+  predictions of ±0.5 correspond to outcomes of ±0.34, ±0.7 to ±0.5.  A logit temperature of
+  1.4–1.5 (`net:<ckpt>:<sims>:<c_puct>:<T>`, implemented in `TorchEvaluator`) fixes the
+  reliability curve (held-out MSE 0.812 → 0.798).  In 24-game matches at 300 simulations it made
+  no measurable difference (17-7 vs the heuristic either way); a PUCT constant of 3.0 was worse
+  (13-11).  The imitation value head's real limitation is *information*, not calibration: the
+  outcomes of ε-greedy heuristic play are close to coin flips for most of the game (correlation
+  0.45 with the outcome), which is also why 600 simulations lost to 100 with that network.
+* **Larger imitation network** (`runs/v4`: 40 000 games, 384×5): held-out policy accuracy 84 %
+  (v3: 78 %), same value floor; playing strength unchanged (11-13 vs v3, 17-7 vs the heuristic).
+  Imitation has saturated at the teacher's level plus search.
+* **Tuning the teacher.** `scripts/heuristic_ab.py` plays parameter variants against the default
+  heuristic on identical deals from both seats (1 000 paired games in ~9 s).  Raising the value of
+  extra-card effects (4 → 6), the tempo bonus (3 → 5), coin flexibility (0.4 → 0.8), the
+  extra-card-token scale (0.6 → 0.9) and shortening the military look-ahead (3 → 2) wins
+  56.1 % [54.3–57.8] over 3 000 paired games, and the tuned heuristic also does better against
+  the search agent (12-18 vs 10-20 at 100 simulations).  Raising the Cat's value *hurt* in
+  self-play; higher blue-card weight and denial weights were neutral.
+* **Expert iteration** (`scripts/expert_iteration.py`): a fixed teacher generates thousands of
+  Gumbel-search games, the network is fine-tuned on them mixed with imitation data, and the
+  candidate must beat the teacher in a 40-game match at 300 simulations to be accepted — one
+  decisive match instead of the pipeline's noisy per-generation gate (now 60 games at 55 %).
+
 ### Reproducing
 
 ```
