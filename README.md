@@ -36,13 +36,15 @@ The rules data was corrected on 2026-09-14 from the physical components (exact p
 counts, the seven Wonder boards with their stage dependency graphs).  Every network trained
 before that date (`imitation_v3`, `imitation_v5`, `expert_v6`; git history up to commit
 `bb15851`) used assumed data and an incompatible feature/action layout and was removed.
-Measured under the *old* data: `random` ≪ `heuristic` ≈ `rollout:200:1` < imitation networks
-< one round of expert iteration (62.5 % vs its teacher).  The ladder under the corrected rules
-is re-measured in `docs/TRAINING.md` as the retrained models are shipped.
+Under the corrected rules (scores against the tuned heuristic, see `docs/TRAINING.md`):
+`random` ≪ `heuristic` (A/B-tuned expert policy) < `net:models/imitation_v7.pt:300` (52.5 %)
+< `rollout:200:1` (75 %) < **`hybrid:models/imitation_v7.pt:300:0.5`** (80 %, network priors
+with playout-blended values).  The imitation network's policy is good and its value head is the
+weak part; expert iteration with the hybrid teacher is the next step.
 
 ```bash
-sevenwa play --ai heuristic                            # the tuned expert policy, always available
-sevenwa play --ai net:models/<checkpoint>.pt:600      # a shipped network, when present in models/
+sevenwa play --ai hybrid:models/imitation_v7.pt:300:0.5   # strongest shipped setting (~1 s per move)
+sevenwa play --ai heuristic                              # the tuned expert policy, instant
 ```
 
 ## Layout

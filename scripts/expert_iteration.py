@@ -55,6 +55,10 @@ def main():
     ap.add_argument("--workers", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--value-mix", type=float, default=0.3)
+    ap.add_argument("--evaluator", default="net", choices=["net", "hybrid"],
+                    help="leaf evaluator of the teacher's search: the network alone or its values blended with heuristic playouts")
+    ap.add_argument("--hybrid-lambda", type=float, default=0.5)
+    ap.add_argument("--playouts", type=int, default=1)
     ap.add_argument("--temp-moves", type=int, default=30)
     ap.add_argument("--imitation-glob", default=None, help="imitation shards to mix in (a random slice is used)")
     ap.add_argument("--imitation-fraction", type=float, default=0.5, help="share of imitation samples in the training set")
@@ -84,7 +88,8 @@ def main():
     data_dir = os.path.join(args.run_dir, "data")
     if not args.skip_generation:
         cfg = SelfPlayConfig(num_simulations=args.sims, batch_size=8, root_mode="gumbel", temperature_moves=args.temp_moves,
-                             value_mix=args.value_mix)
+                             value_mix=args.value_mix, evaluator=args.evaluator, hybrid_lambda=args.hybrid_lambda,
+                             rollout_playouts=args.playouts)
         run_selfplay(cfg, args.games, args.teacher, data_dir, 1, args.workers, seed=args.seed, log=log)
     shards = sorted(glob.glob(os.path.join(data_dir, "gen0001_*.npz")))
     for g in args.extra_search_glob:

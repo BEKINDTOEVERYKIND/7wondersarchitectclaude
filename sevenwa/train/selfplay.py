@@ -34,9 +34,10 @@ class SelfPlayConfig:
     temperature: float = 1.0
     temperature_moves: int = 20       # number of decisions (per game) played with temperature
     final_temperature: float = 0.0
-    evaluator: str = "net"             # "net" | "rollout"
+    evaluator: str = "net"             # "net" | "rollout" | "hybrid" (net priors, values blended with playouts)
     rollout_playouts: int = 1
     rollout_policy: str = "heuristic"  # "heuristic" | "random"
+    hybrid_lambda: float = 0.5         # hybrid: value = (1-lam)*v_net + lam*mean(playouts)
     net_threads: int = 1
     max_plies: int = 2000
     root_mode: str = "puct"            # "puct" (visit-count targets) | "gumbel" (sequential halving, completed-Q targets)
@@ -58,13 +59,19 @@ class GameRecord:
 
 
 def _make_evaluator(cfg: SelfPlayConfig, checkpoint: Optional[str], rng: np.random.Generator):
-    if cfg.evaluator == "net":
+    if cfg.evaluator in ("net", "hybrid"):
         import torch
         from ..nn.evaluator import TorchEvaluator
         from ..nn.model import PolicyValueNet
         torch.set_num_threads(cfg.net_threads)
         net = PolicyValueNet.load(checkpoint)
-        return TorchEvaluator(net, encode, num_threads=cfg.net_threads)
+        ev = TorchEvaluator(net, encode, num_threads=cfg.net_threads)
+        if cfg.evaluator == "net":
+            return ev
+        from ..agents.heuristic import heuristic_action
+        from ..search.rollout import HybridEvaluator
+        return HybridEvaluator(ev, Actions.NUM, lam=cfg.hybrid_lambda, playouts_per_leaf=cfg.rollout_playouts,
+                               policy_fn=heuristic_action, rng=rng)
     if cfg.rollout_policy == "heuristic":
         from ..agents.heuristic import heuristic_action, heuristic_prior
         return RolloutEvaluator(Actions.NUM, playouts_per_leaf=cfg.rollout_playouts, policy_fn=heuristic_action,

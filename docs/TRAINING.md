@@ -283,6 +283,35 @@ as before (`extra_card_value=4` 45.3 %, `sci_token_factor=0.7` 47.9 %, `tok_extr
 47.9 %, `tempo_bonus=3` 48.0 %).  The defaults tuned on the assumed data therefore carry over
 unchanged.
 
+### Imitation bootstrap on the corrected rules (`runs/v7`, shipped as `models/imitation_v7.pt`)
+
+40 000 ε-greedy heuristic games (2.42 M samples, 5.3 min on 4 workers), 384×5 network, 3 epochs
+(30 min): held-out policy accuracy **85.2 %**, value MSE 0.81, score-margin MSE 0.27.  By decision
+kind the raw policy agrees with the teacher on 86 % of picks, 89 % of token choices, 100 % of the
+(rare) stage choices, 96 % of Halicarnassus keeps and 58 % of payment steps.
+
+Matches against the tuned heuristic (40 or 20 games, both seats):
+
+| agent | score vs heuristic | note |
+|---|---|---|
+| `netraw:imitation_v7` (no search) | 45.0 % (45-55, n = 100) | the usual imitation deficit |
+| `net:imitation_v7:300` | 52.5 % (21-19) | far below the 87.5 % the old-rules imitation net reached |
+| `net:imitation_v7:300` vs `netraw` | 65.0 % (13-7) | search helps, but not much |
+| `rollout:200:1` (heuristic playouts) | 75.0 % (15-5) | search now clearly beats the greedy teacher (it only drew level under the old rules) |
+| **`hybrid:imitation_v7:300:0.5`** | **80.0 % (16-4, +9.6 margin)** | net priors, values blended 50/50 with playouts |
+
+The diagnosis is the value head: its sign agrees with the final result on only 65 % of
+early/mid-game positions of heuristic games (73 % late), so plain net-MCTS cannot exploit its
+own (good) priors, while the same priors with playout-grounded values win 80 %.  The corrected
+rules (stage graphs, more even card counts) make the game harder to value from ε-greedy
+outcomes than the old linear Wonders did.  Until a network with a better value head is shipped,
+**`hybrid:models/imitation_v7.pt:300:0.5` is the strongest play setting** (about 1 s per decision).
+
+Consequence for training: `SelfPlayConfig.evaluator = "hybrid"` (and `scripts/expert_iteration.py
+--evaluator hybrid --hybrid-lambda 0.5`) lets the expert-iteration teacher search with
+playout-blended values, so the search-play outcomes and root values that train the candidate's
+value head come from 80 %-strength play instead of 52 %-strength play.
+
 ### Reproducing
 
 ```
