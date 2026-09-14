@@ -210,6 +210,15 @@ imitation run (`runs/v4`: 40 000 games, 384×5 network) is the next rung.
   candidate must beat the teacher in a 40-game match at 300 simulations to be accepted — one
   decisive match instead of the pipeline's noisy per-generation gate (now 60 games at 55 %).
 
+### Third imitation run with the tuned teacher (`runs/v5`)
+
+40 000 games of the A/B-tuned heuristic, 384×5 network, 3 epochs: held-out policy accuracy 86 %
+(v4: 84 %).  Matches at 300 simulations: **24-16 (60 %) against v4** and **21-3 (87.5 %, +6.6
+mean margin) against the tuned heuristic** — the strongest agent so far and the shipped model
+`models/imitation_v5.pt`.  A stronger teacher transferred directly into a stronger imitation
+network; `scripts/heuristic_tune.py` automates the teacher tuning (coordinate descent with paired
+A/B confirmation) for the next rounds.
+
 ### Reproducing
 
 ```
