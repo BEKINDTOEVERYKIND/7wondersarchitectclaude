@@ -5,7 +5,8 @@ Specs
 * ``random``
 * ``heuristic`` or ``heuristic:<epsilon>``
 * ``rollout:<sims>[:<playouts>[:<policy>]]``   – MCTS with playouts; policy ``heuristic`` (default) or ``random``
-* ``net:<checkpoint.pt>[:<sims>]``            – neural MCTS (default 200 simulations)
+* ``net:<checkpoint.pt>[:<sims>[:<c_puct>[:<value_T>]]]`` – neural MCTS (default 200 simulations; optional
+  PUCT constant and value-calibration temperature, e.g. ``net:m.pt:300:3.0:1.45``)
 * ``netraw:<checkpoint.pt>``                  – the network's policy alone (no search)
 * ``hybrid:<checkpoint.pt>[:<sims>[:<lam>[:<playouts>]]]`` – neural MCTS whose leaf values are blended
   with heuristic playouts: value = (1-lam)·net + lam·playout (default sims 100, lam 0.5, 1 playout)
@@ -98,11 +99,15 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
         from ..nn.model import PolicyValueNet
         path = parts[1]
         net = PolicyValueNet.load(path)
-        ev = TorchEvaluator(net, encode, num_threads=net_threads)
+        value_t = float(parts[4]) if len(parts) > 4 else 1.0
+        ev = TorchEvaluator(net, encode, num_threads=net_threads, value_temperature=value_t)
         if kind == "netraw":
             return RawNetAgent(ev, name=f"netraw({path})", rng=rng)
         cfg = replace(mcts_config) if mcts_config is not None else MCTSConfig(num_simulations=200)
         if len(parts) > 2:
             cfg.num_simulations = int(parts[2])
-        return MCTSAgent(ev, cfg, name=f"net{cfg.num_simulations}({path})", rng=rng, num_actions=Actions.NUM)
+        if len(parts) > 3:
+            cfg.c_puct = float(parts[3])
+        tag = f"net{cfg.num_simulations}" + (f"c{cfg.c_puct:g}" if len(parts) > 3 else "") + (f"T{value_t:g}" if len(parts) > 4 else "")
+        return MCTSAgent(ev, cfg, name=f"{tag}({path})", rng=rng, num_actions=Actions.NUM)
     raise ValueError(f"unknown agent spec: {spec}")

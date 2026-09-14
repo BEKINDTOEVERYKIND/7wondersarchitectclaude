@@ -20,10 +20,13 @@ EncodeFn = Callable[[GameState], Tuple[np.ndarray, np.ndarray]]
 
 class TorchEvaluator:
     def __init__(self, net: PolicyValueNet, encode: EncodeFn, cache_size: int = 200_000,
-                 device: str = "cpu", num_threads: Optional[int] = None):
+                 device: str = "cpu", num_threads: Optional[int] = None, value_temperature: float = 1.0):
         self.net = net.to(device).eval()
         self.encode = encode
         self.device = device
+        # Calibration: v' = tanh(atanh(v) / T).  T > 1 shrinks over-confident values towards 0
+        # (fitted on held-out data: T ≈ 1.4-1.5 for the imitation networks).
+        self.value_temperature = float(value_temperature)
         self.cache: "OrderedDict[bytes, Tuple[np.ndarray, float]]" = OrderedDict()
         self.cache_size = cache_size
         self.calls = 0
@@ -59,6 +62,8 @@ class TorchEvaluator:
             logits, v, _ = self.net(feats)
             logits = logits.masked_fill(~masks, -1e9)
             probs = torch.softmax(logits, dim=-1).cpu().numpy()
+            if self.value_temperature != 1.0:
+                v = torch.tanh(torch.atanh(v.clamp(-0.999, 0.999)) / self.value_temperature)
             v = v.cpu().numpy()
             for j, i in enumerate(todo):
                 pols[i] = probs[j]
