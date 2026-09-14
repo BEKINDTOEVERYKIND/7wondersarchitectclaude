@@ -67,6 +67,8 @@ def main():
     ap.add_argument("--match-sims", type=int, default=300)
     ap.add_argument("--accept", type=float, default=0.55)
     ap.add_argument("--skip-generation", action="store_true", help="reuse existing shards in run-dir/data")
+    ap.add_argument("--extra-search-glob", action="append", default=[],
+                    help="search-play shards from earlier rounds to include in training (repeatable)")
     args = ap.parse_args()
     os.makedirs(os.path.join(args.run_dir, "data"), exist_ok=True)
     os.makedirs(os.path.join(args.run_dir, "ckpt"), exist_ok=True)
@@ -85,6 +87,8 @@ def main():
                              value_mix=args.value_mix)
         run_selfplay(cfg, args.games, args.teacher, data_dir, 1, args.workers, seed=args.seed, log=log)
     shards = sorted(glob.glob(os.path.join(data_dir, "gen0001_*.npz")))
+    for g in args.extra_search_glob:
+        shards += sorted(glob.glob(g))
     # hold out whole worker shards' tail: simplest reproducible split is by sample index
     train = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
     hold = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
