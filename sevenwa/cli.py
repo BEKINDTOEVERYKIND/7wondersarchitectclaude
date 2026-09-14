@@ -219,8 +219,8 @@ def main(argv=None):
     s.set_defaults(func=cmd_play)
 
     s = sub.add_parser("transcript", help="play one annotated game and write a markdown transcript")
-    s.add_argument("--a", default="net:models/imitation_v3.pt:300")
-    s.add_argument("--b", default="net:models/imitation_v3.pt:300")
+    s.add_argument("--a", default="heuristic")
+    s.add_argument("--b", default="heuristic")
     s.add_argument("--sims", type=int, default=300)
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--wonders", default=None, help="comma-separated wonder ids for P0,P1 (default random)")

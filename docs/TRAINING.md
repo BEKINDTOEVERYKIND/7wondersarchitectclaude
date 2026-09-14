@@ -252,6 +252,37 @@ keeps them).  The heuristic teacher was re-validated on the new rules with the p
 harness (see the entries below) and the network was retrained from scratch: imitation
 bootstrap, then expert iteration.
 
+### Teacher check under the corrected rules (2026-09-14)
+
+Paired A/B (3 000 deals, both seats, `scripts/heuristic_ab.py --seed 11`) of two knowledge
+knobs suggested by the user's strategic answers — "horn military cards are worthless early" and
+"early green cards are strategically valuable" — against the tuned defaults:
+
+| variant | score | 95 % CI | mean margin |
+|---|---|---|---|
+| `early_horn_discount=0.5` | 50.4 % | 49.1–51.6 | −0.08 |
+| `early_horn_discount=1.0` | 50.9 % | 49.7–52.2 | −0.11 |
+| `green_early_bonus=1.0` | 50.5 % | 49.2–51.8 | +0.14 |
+| `green_early_bonus=2.0` | 50.1 % | 48.8–51.4 | +0.04 |
+| `green_early_bonus=3.0` | 49.1 % | 47.9–50.4 | −0.03 |
+| both (0.5 / 1.0) | 50.2 % | 49.0–51.5 | −0.02 |
+
+All neutral: the tuned model already encodes both facts.  At the start of a Rhodes game the
+heuristic's card values (VP-like units) are: any resource 7.5, coin 8.3, **green 8.5**, civ3
+3.0, civ2cat 3.8, hornless shield 5.9, **horn cards 2.7** — greens are the most valuable pick
+and horn cards the least, because the green value is the potential of the best available
+Progress token (a token such as Architecture is worth ~24 at that point) while a horn card's
+value is only the battle-probability-weighted military swing.  The knobs stay in
+`HeuristicParams` at 0 for future experiments.
+
+A broader re-tune sweep under the corrected rules (2 000 deals per variant, `--seed 23`, one
+parameter moved at a time from the tuned defaults) found nothing better either — the best
+variants (`perm_shield_bonus=0.2`, `res_discount=0.95`, `tempo_bonus=7`, `mil_lookahead=1`)
+score 51.0–51.1 % with confidence intervals containing 50 %, and the clear losers are the same
+as before (`extra_card_value=4` 45.3 %, `sci_token_factor=0.7` 47.9 %, `tok_extra_scale=0.6`
+47.9 %, `tempo_bonus=3` 48.0 %).  The defaults tuned on the assumed data therefore carry over
+unchanged.
+
 ### Reproducing
 
 ```
