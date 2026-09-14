@@ -228,18 +228,20 @@ def imitation_worker(args) -> Dict:
 
 
 def run_imitation(num_games: int, out_dir: str, generation: int = 0, num_workers: int = 4, seed: int = 0,
-                  epsilon: float = 0.1, log=print) -> List[Dict]:
+                  epsilon: float = 0.1, log=print, games_per_job: int = 500) -> List[Dict]:
+    """Generate imitation data in small jobs (``games_per_job`` games each, one shard per job) so that a
+    worker never holds more than ~30k samples in memory and a lost job costs little."""
     import multiprocessing as mp
     seeds = [seed + i for i in range(num_games)]
-    chunks = [seeds[i::num_workers] for i in range(num_workers)]
+    chunks = [seeds[i:i + games_per_job] for i in range(0, num_games, games_per_job)]
     jobs = [{"seeds": c, "epsilon": epsilon, "rng_seed": seed * 1000 + i, "generation": generation,
-             "out_path": os.path.join(out_dir, f"gen{generation:04d}_w{i}.npz")} for i, c in enumerate(chunks) if c]
+             "out_path": os.path.join(out_dir, f"gen{generation:04d}_j{i:04d}.npz")} for i, c in enumerate(chunks) if c]
     t0 = time.time()
     if num_workers <= 1 or len(jobs) == 1:
         results = [imitation_worker(j) for j in jobs]
     else:
-        with mp.get_context("spawn").Pool(len(jobs)) as pool:
-            results = pool.map(imitation_worker, jobs)
+        with mp.get_context("spawn").Pool(min(num_workers, len(jobs))) as pool:
+            results = pool.map(imitation_worker, jobs, chunksize=1)
     games = sum(r["games"] for r in results)
     log(f"imitation data: {games} heuristic games, {sum(r['samples'] for r in results)} samples, {time.time() - t0:.1f}s")
     return results
