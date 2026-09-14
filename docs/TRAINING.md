@@ -219,6 +219,13 @@ mean margin) against the tuned heuristic** — the strongest agent so far and th
 network; `scripts/heuristic_tune.py` automates the teacher tuning (coordinate descent with paired
 A/B confirmation) for the next rounds.
 
+### Play settings for the shipped model
+
+`imitation_v5` benefits from deeper search (unlike the first imitation network): at 600
+simulations it beats itself at 150 simulations 15-9 (62.5 %).  For the strongest play use as
+many simulations as your time budget allows, e.g. `net:models/imitation_v5.pt:600` (about
+0.5 s per decision on one CPU core); the optional value temperature (`:1.75:1.45`) is neutral.
+
 ### Reproducing
 
 ```
