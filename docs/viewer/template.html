@@ -1,0 +1,375 @@
+<title>Architects Replay</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f3f4f1;          /* stone ground */
+    --bg-2: #e9ebe6;
+    --panel: #fbfbf9;
+    --line: #d3d6cf;
+    --line-2: #bfc3ba;
+    --ink: #1c1f1c;
+    --ink-2: #4d534d;
+    --ink-3: #7b827b;
+    --p0: #4a3aa7;          /* player 0 accent (validated slot 7) */
+    --p1: #eb6834;          /* player 1 accent (validated slot 2) */
+    --p0-soft: #ebe8f7;
+    --p1-soft: #fbe9e1;
+    --grey: #8a8f8a;        /* card type: resource */
+    --yellow: #c98500;      /* coin */
+    --blue: #2a78d6;        /* civil */
+    --green: #178a4c;       /* science */
+    --red: #c9413f;         /* military */
+    --built: #1c1f1c;
+    --focus: #2a78d6;
+    --shadow: 0 1px 2px rgba(20, 24, 20, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #171a18; --bg-2: #1f2320; --panel: #202421; --line: #353a36; --line-2: #4a504b;
+      --ink: #eceeea; --ink-2: #b8bdb7; --ink-3: #868c86;
+      --p0: #9085e9; --p1: #d95926; --p0-soft: #2a2740; --p1-soft: #3a2620;
+      --grey: #9aa09a; --yellow: #e0a12b; --blue: #5b9be8; --green: #3fb371; --red: #e36663;
+      --built: #eceeea; --focus: #5b9be8; --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #171a18; --bg-2: #1f2320; --panel: #202421; --line: #353a36; --line-2: #4a504b;
+    --ink: #eceeea; --ink-2: #b8bdb7; --ink-3: #868c86;
+    --p0: #9085e9; --p1: #d95926; --p0-soft: #2a2740; --p1-soft: #3a2620;
+    --grey: #9aa09a; --yellow: #e0a12b; --blue: #5b9be8; --green: #3fb371; --red: #e36663;
+    --built: #eceeea; --focus: #5b9be8; --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; font-size: 14px; line-height: 1.45;
+    padding-inline: 16px; padding-block: 12px 24px;
+    font-variant-numeric: tabular-nums;
+  }
+  h1, h2, h3 { margin: 0; font-weight: 400; text-wrap: balance; }
+  .display { font-family: "Marcellus", "Palatino Linotype", Georgia, serif; }
+  .mono { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; }
+  .eyebrow { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+  button { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  .app { max-width: 1240px; margin: 0 auto; display: grid; gap: 14px; }
+
+  /* ---- header ---- */
+  .top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+  .top h1 { font-size: 26px; letter-spacing: .01em; }
+  .top .sub { color: var(--ink-2); max-width: 65ch; }
+
+  .games { display: flex; flex-wrap: wrap; gap: 8px; }
+  .game-tab {
+    display: grid; gap: 2px; text-align: left; padding: 8px 12px; min-width: 200px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; box-shadow: var(--shadow);
+  }
+  .game-tab[aria-selected="true"] { border-color: var(--ink); }
+  .game-tab .t { font-size: 15px; }
+  .game-tab .r { color: var(--ink-2); font-size: 12px; }
+
+  /* ---- scrubber ---- */
+  .scrub { display: grid; grid-template-columns: auto auto 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .scrub button { padding: 6px 10px; background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 4px; cursor: pointer; }
+  .scrub button:hover { border-color: var(--ink-3); }
+  .scrub input[type=range] { width: 100%; accent-color: var(--ink); }
+  .scrub .where { display: grid; gap: 1px; }
+  .scrub .where .turn { font-size: 18px; }
+  .scrub .where .mover { color: var(--ink-2); font-size: 12px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+  .badge.p0 { background: var(--p0-soft); color: var(--p0); }
+  .badge.p1 { background: var(--p1-soft); color: var(--p1); }
+  .hint { color: var(--ink-3); font-size: 12px; }
+
+  /* ---- board ---- */
+  .board { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(300px, 1.15fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 940px) { .board { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; display: grid; gap: 10px; box-shadow: var(--shadow); }
+  .panel.player { border-top: 3px solid var(--pc); }
+  .panel.player.p0 { --pc: var(--p0); --pc-soft: var(--p0-soft); }
+  .panel.player.p1 { --pc: var(--p1); --pc-soft: var(--p1-soft); }
+  .phead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .phead h2 { font-size: 21px; }
+  .score { font-size: 28px; line-height: 1; }
+  .score small { font-size: 12px; color: var(--ink-3); margin-left: 4px; }
+  .mover-mark { font-size: 11px; color: var(--pc); letter-spacing: .06em; text-transform: uppercase; }
+
+  .stages { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+  .stage { border: 1px solid var(--line-2); border-radius: 4px; padding: 5px 4px 4px; display: grid; gap: 2px; text-align: center; min-width: 0; }
+  .stage .lbl { font-size: 11px; color: var(--ink-3); letter-spacing: .04em; }
+  .stage .vp { font-size: 17px; line-height: 1.1; }
+  .stage .fx { font-size: 10px; color: var(--ink-2); line-height: 1.2; min-height: 12px; }
+  .stage.built { background: var(--built); color: var(--bg); border-color: var(--built); }
+  .stage.built .lbl, .stage.built .fx { color: var(--bg); opacity: .8; }
+  .stage.avail { border-color: var(--pc); border-style: dashed; }
+  .stage.locked { opacity: .45; }
+  .stage-note { font-size: 11px; color: var(--ink-3); }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+  .kv dt { color: var(--ink-3); }
+  .kv dd { margin: 0; }
+
+  .cards { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px 2px 5px; border: 1px solid var(--line); border-radius: 4px; font-size: 12.5px; background: var(--bg); }
+  .chip i { width: 9px; height: 13px; border-radius: 2px; background: var(--c); flex: none; }
+  .chip b { font-weight: 600; }
+  .chip.new { border-color: var(--pc); box-shadow: inset 0 0 0 1px var(--pc-soft); }
+  .none { color: var(--ink-3); font-style: italic; }
+  .tokens { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tok { padding: 2px 8px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); font-size: 12px; }
+
+  /* ---- centre ---- */
+  .table-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .deck { border: 1px solid var(--line-2); border-radius: 4px; padding: 6px 8px; display: grid; gap: 2px; }
+  .deck .n { font-size: 16px; }
+  .deck .who { font-size: 11px; color: var(--ink-3); }
+  .status { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; }
+  .conflict { display: inline-flex; gap: 3px; vertical-align: middle; margin-left: 4px; }
+  .conflict i { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--ink-3); display: inline-block; }
+  .conflict i.on { background: var(--red); border-color: var(--red); }
+
+  .log { display: grid; gap: 8px; }
+  .dec { border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; display: grid; gap: 6px; }
+  .dec .q { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .dec .q .what { font-weight: 500; }
+  .dec .q .rv { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+  .opts { display: grid; gap: 3px; }
+  .opt { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); }
+  .opt .txt { min-width: 0; overflow-wrap: anywhere; }
+  .opt.chosen { color: var(--ink); }
+  .opt.chosen .txt::before { content: "▸ "; color: var(--pc); }
+  .opt .bar { position: relative; width: 84px; height: 12px; background: var(--bg-2); border-radius: 2px; overflow: hidden; }
+  .opt .bar i { position: absolute; inset: 0 auto 0 0; background: var(--pc); opacity: .55; border-radius: 2px; }
+  .opt.chosen .bar i { opacity: 1; }
+  .opt .num { font-size: 11px; color: var(--ink-3); white-space: nowrap; min-width: 84px; text-align: right; }
+  .gain { font-size: 12px; color: var(--ink-2); }
+  .gain .chip { font-size: 11.5px; padding: 1px 6px 1px 4px; }
+
+  /* ---- chart ---- */
+  .chart-wrap { display: grid; gap: 6px; }
+  .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; align-items: baseline; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--ink-2); }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+  svg.chart { width: 100%; height: auto; display: block; }
+  svg.chart text { font-family: "IBM Plex Sans", system-ui, sans-serif; font-size: 11px; fill: var(--ink-3); }
+  svg.chart .grid { stroke: var(--line); stroke-width: 1; }
+  svg.chart .axis { stroke: var(--line-2); stroke-width: 1; }
+  svg.chart .s0 { stroke: var(--p0); } svg.chart .s1 { stroke: var(--p1); }
+  svg.chart .f0 { fill: var(--p0); } svg.chart .f1 { fill: var(--p1); }
+  svg.chart .cursor { stroke: var(--ink-3); stroke-dasharray: 3 3; }
+  svg.chart .lab { fill: var(--ink); font-weight: 500; }
+  svg.chart .hit { fill: transparent; cursor: pointer; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line-2); border-radius: 4px; padding: 4px 8px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; }
+  .tip[hidden] { display: none; }
+  .chart-host { position: relative; }
+
+  .final { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
+  @media (prefers-reduced-motion: no-preference) { .stage, .chip { transition: background-color .15s, border-color .15s; } }
+</style>
+
+<div class="app">
+  <header class="top">
+    <h1 class="display">Architects Replay</h1>
+    <div class="sub">Three complete games of the strongest agent playing itself — network priors with playout-blended values, 300 simulations per decision. Step through every turn to see the table, each decision and what the search believed.</div>
+  </header>
+
+  <div class="games" id="games" role="tablist" aria-label="Games"></div>
+
+  <div class="scrub">
+    <button id="prev" type="button" aria-label="Previous turn">◀</button>
+    <button id="next" type="button" aria-label="Next turn">▶</button>
+    <input id="turn" type="range" min="1" max="1" value="1" aria-label="Turn">
+    <div class="where"><div class="turn display" id="turnLabel">Turn 1</div><div class="mover" id="moverLabel"></div></div>
+  </div>
+  <div class="hint">← → step turns · Home / End jump · click a point in the chart to jump there. Panels show the table after the turn's actions; new cards are outlined.</div>
+
+  <div class="board">
+    <section class="panel player p0" id="pl0" aria-label="Player 0"></section>
+    <section class="panel" id="centre" aria-label="Table and decisions"></section>
+    <section class="panel player p1" id="pl1" aria-label="Player 1"></section>
+  </div>
+
+  <section class="panel chart-wrap">
+    <div class="chart-head">
+      <div><div class="eyebrow">Score after each turn</div><div class="legend" id="legend"></div></div>
+      <div class="final" id="final"></div>
+    </div>
+    <div class="chart-host"><svg class="chart" id="chart" viewBox="0 0 860 230" role="img" aria-label="Score over turns"></svg><div class="tip" id="tip" hidden></div></div>
+  </section>
+</div>
+
+<script id="games-data" type="application/json">__GAMES_JSON__</script>
+<script>
+(function () {
+  const GAMES = JSON.parse(document.getElementById('games-data').textContent);
+  const KIND = {
+    wood: ['Wood', 'grey'], stone: ['Stone', 'grey'], clay: ['Clay', 'grey'], papyrus: ['Papyrus', 'grey'], glass: ['Glass', 'grey'],
+    coin: ['Coin', 'yellow'], civ3: ['3 VP', 'blue'], civ2cat: ['2 VP + Cat', 'blue'],
+    tablet: ['Tablet', 'green'], gear: ['Gear', 'green'], compass: ['Compass', 'green'],
+    shield: ['Shield', 'red'], shield_h1: ['Shield + horn', 'red'], shield_h2: ['Shield + 2 horns', 'red'],
+  };
+  const KIND_ORDER = Object.keys(KIND);
+  const EFFECT = { none: '', shield: '+1 shield', any_deck_card: 'any deck top', look_5_choose_1: 'look 5, keep 1',
+                   left_and_right_cards: 'both side tops', central_card: 'central top', progress_token: 'a token' };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const S = n => `S${n + 1}`;
+
+  let gi = 0, ti = 0;
+  const $ = id => document.getElementById(id);
+
+  function chipsHtml(cards, gained, pc) {
+    const keys = KIND_ORDER.filter(k => cards[k]);
+    if (!keys.length) return '<span class="none">no cards</span>';
+    const g = {}; (gained || []).forEach(k => { g[k] = (g[k] || 0) + 1; });
+    return keys.map(k => `<span class="chip${g[k] ? ' new' : ''}" title="${esc(KIND[k][0])}"><i style="--c: var(--${KIND[k][1]})"></i>${esc(KIND[k][0])}${cards[k] > 1 ? ` <b>×${cards[k]}</b>` : ''}</span>`).join('');
+  }
+
+  function playerHtml(p, ps, table, isMover, gained) {
+    const built = ps.stages.filter(s => s.built).length;
+    const stages = ps.stages.map(s => {
+      const cls = s.built ? 'built' : (s.available ? 'avail' : 'locked');
+      const req = s.requires.length ? `needs ${s.requires.map(S).join('+')}` : 'foundation';
+      return `<div class="stage ${cls}" title="${esc(req)}"><div class="lbl">${S(s.idx)} ${s.cost}${s.kind === 'identical' ? '=' : '≠'}</div><div class="vp">${s.vp}</div><div class="fx">${esc(EFFECT[s.effect] || '')}</div></div>`;
+    }).join('');
+    const blue = (ps.cards.civ3 || 0) * 3 + (ps.cards.civ2cat || 0) * 2;
+    const other = ps.score - ps.stage_vp - blue - ps.mil_tokens * 3 - (ps.cat ? 2 : 0);
+    const bits = [`stages ${ps.stage_vp}`, `blue ${blue}`];
+    if (ps.mil_tokens) bits.push(`military ${ps.mil_tokens * 3}`);
+    if (ps.cat) bits.push('cat 2');
+    if (other) bits.push(`tokens ${other}`);
+    return `
+      <div class="phead"><div><div class="mover-mark">${isMover ? 'to move this turn' : '&nbsp;'}</div><h2 class="display">${esc(ps.wonder)} <span class="badge p${p}">P${p}</span></h2></div>
+        <div class="score">${ps.score}<small>VP</small></div></div>
+      <div class="stages">${stages}</div>
+      <div class="stage-note">${built}/5 stages · ${bits.join(' · ')}</div>
+      <dl class="kv"><dt>Shields</dt><dd>${ps.shields}${ps.wonder_shields ? ` (${ps.wonder_shields} from the Wonder)` : ''}</dd>
+        <dt>Military tokens</dt><dd>${ps.mil_tokens}</dd>
+        <dt>Cat</dt><dd>${ps.cat ? 'held' : '—'}</dd>
+        <dt>Tokens</dt><dd>${ps.tokens.length ? `<span class="tokens">${ps.tokens.map(t => `<span class="tok">${esc(t)}</span>`).join('')}</span>` : '<span class="none">none</span>'}</dd></dl>
+      <div><div class="eyebrow">Cards in front</div><div class="cards" style="margin-top:4px">${chipsHtml(ps.cards, gained)}</div></div>`;
+  }
+
+  function optHtml(o, chosen, maxV) {
+    const nums = [];
+    if (o.visits !== undefined) nums.push(`${o.visits}`);
+    if (o.q !== undefined) nums.push(`Q ${o.q >= 0 ? '+' : ''}${o.q.toFixed(2)}`);
+    const w = maxV ? Math.round(100 * (o.visits || 0) / maxV) : 0;
+    return `<div class="opt${chosen ? ' chosen' : ''}"><div class="txt">${esc(o.text)}</div>${o.visits !== undefined ? `<div style="display:flex;gap:8px;align-items:center"><div class="bar" aria-hidden="true"><i style="width:${w}%"></i></div><div class="num mono">${nums.join(' · ')}</div></div>` : ''}</div>`;
+  }
+
+  function centreHtml(t, game) {
+    const tb = t.end.table;
+    const names = [game.wonders[0], game.wonders[1]];
+    const decks = tb.decks.map((d, i) => {
+      const who = i === 2 ? 'central deck' : `${names[i]} deck (P${i})`;
+      let top;
+      if (i === 2) top = d.top ? `${KIND[d.top][0]} <span class="who">peeked by ${d.known_to.map(p => 'P' + p).join(', ')}</span>` : (d.size ? 'face down' : 'empty');
+      else top = d.top ? KIND[d.top][0] : (d.size ? '?' : 'empty');
+      return `<div class="deck"><div class="who">${esc(who)}</div><div class="n">${d.size} <span class="who">cards</span></div><div>${top}</div></div>`;
+    }).join('');
+    const conflict = `<span class="conflict" aria-label="${tb.conflict} of ${tb.conflict_max} conflict tokens">${Array.from({ length: tb.conflict_max }, (_, i) => `<i class="${i < tb.conflict ? 'on' : ''}"></i>`).join('')}</span>`;
+    const decs = t.decisions.map(d => {
+      const maxV = Math.max(0, ...d.options.map(o => o.visits || 0));
+      const opts = d.options.slice().sort((a, b) => (b.visits || 0) - (a.visits || 0)).map(o => optHtml(o, o.action === d.chosen, maxV)).join('');
+      const rv = d.root_value !== null && d.root_value !== undefined ? `search value ${d.root_value >= 0 ? '+' : ''}${d.root_value.toFixed(2)} · ${d.seconds}s` : '';
+      const gain = d.cards_gained.length ? `<div class="gain">gained ${chipsHtml(d.cards_gained.reduce((m, k) => (m[k] = (m[k] || 0) + 1, m), {}))}</div>` : '';
+      return `<div class="dec" style="--pc: var(--p${d.player})"><div class="q"><div class="what"><span class="badge p${d.player}">P${d.player}</span> ${esc(d.text)}</div><div class="rv mono">${rv}</div></div><div class="opts">${opts}</div>${gain}</div>`;
+    }).join('');
+    return `
+      <div class="eyebrow">Table after turn ${t.turn}</div>
+      <div class="table-row">${decks}</div>
+      <div class="status"><span>Conflict ${tb.conflict}/${tb.conflict_max}${conflict}</span><span>Cat: ${tb.cat < 0 ? 'in the middle' : 'P' + tb.cat}</span><span>Token stack ${tb.stack}</span></div>
+      <div class="status"><span>Face-up tokens: ${tb.faceup.length ? tb.faceup.map(x => `<span class="tok">${esc(x)}</span>`).join(' ') : '<span class="none">none left</span>'}</span></div>
+      <div class="eyebrow" style="margin-top:4px">Decisions this turn (P${t.mover}) · bars = search visits, Q = expected result for the mover</div>
+      <div class="log">${decs || '<span class="none">no real choice this turn (everything was forced)</span>'}</div>`;
+  }
+
+  function render() {
+    const game = GAMES[gi];
+    const t = game.turns[ti];
+    const gained = t.decisions.flatMap(d => d.cards_gained);
+    $('pl0').innerHTML = playerHtml(0, t.end.players[0], t.end.table, t.mover === 0, t.mover === 0 ? gained : []);
+    $('pl1').innerHTML = playerHtml(1, t.end.players[1], t.end.table, t.mover === 1, t.mover === 1 ? gained : []);
+    $('centre').innerHTML = centreHtml(t, game);
+    $('turnLabel').textContent = `Turn ${t.turn} of ${game.turns.length}`;
+    $('moverLabel').innerHTML = `<span class="badge p${t.mover}">P${t.mover}</span> ${esc(game.wonders[t.mover])} moved · ${t.end.players[0].score}–${t.end.players[1].score}`;
+    const r = $('turn'); r.max = game.turns.length; r.value = ti + 1;
+    $('prev').disabled = ti === 0; $('next').disabled = ti === game.turns.length - 1;
+    drawChart(game);
+    document.querySelectorAll('.game-tab').forEach((b, i) => b.setAttribute('aria-selected', i === gi ? 'true' : 'false'));
+  }
+
+  function drawChart(game) {
+    const W = 860, H = 230, L = 34, R = 56, T = 14, B = 28;
+    const n = game.turns.length;
+    const s0 = [0].concat(game.turns.map(t => t.end.players[0].score));
+    const s1 = [0].concat(game.turns.map(t => t.end.players[1].score));
+    const maxY = Math.max(10, ...s0, ...s1);
+    const yTop = Math.ceil(maxY / 10) * 10;
+    const x = i => L + (W - L - R) * i / n;
+    const y = v => T + (H - T - B) * (1 - v / yTop);
+    let g = '';
+    for (let v = 0; v <= yTop; v += 10) g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+    const step = n > 40 ? 10 : 5;
+    for (let i = 0; i <= n; i += step) g += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle">${i}</text>`;
+    g += `<line class="axis" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>`;
+    const path = s => s.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    g += `<line class="cursor" x1="${x(ti + 1)}" x2="${x(ti + 1)}" y1="${T}" y2="${y(0)}"/>`;
+    g += `<path class="s0" d="${path(s0)}" fill="none" stroke-width="2"/><path class="s1" d="${path(s1)}" fill="none" stroke-width="2"/>`;
+    const cur = ti + 1;
+    g += `<circle class="f0" cx="${x(cur)}" cy="${y(s0[cur])}" r="4.5" stroke="var(--panel)" stroke-width="2"/><circle class="f1" cx="${x(cur)}" cy="${y(s1[cur])}" r="4.5" stroke="var(--panel)" stroke-width="2"/>`;
+    const e0 = y(s0[n]), e1 = y(s1[n]);
+    const sep = Math.abs(e0 - e1) < 12 ? (e0 < e1 ? -6 : 6) : 0;
+    g += `<text class="lab" x="${W - R + 6}" y="${e0 + 4 + sep}">P0 ${s0[n]}</text><text class="lab" x="${W - R + 6}" y="${e1 + 4 - sep}">P1 ${s1[n]}</text>`;
+    for (let i = 1; i <= n; i++) g += `<rect class="hit" data-i="${i}" x="${x(i - 0.5)}" y="${T}" width="${x(i + 0.5) - x(i - 0.5)}" height="${y(0) - T}"/>`;
+    const svg = $('chart'); svg.innerHTML = g;
+    svg.querySelectorAll('.hit').forEach(r => {
+      r.addEventListener('mousemove', ev => {
+        const i = +r.dataset.i; const tip = $('tip'); tip.hidden = false;
+        tip.innerHTML = `Turn ${i}: <b style="color:var(--p0)">P0 ${s0[i]}</b> · <b style="color:var(--p1)">P1 ${s1[i]}</b>`;
+        const host = svg.parentElement.getBoundingClientRect();
+        tip.style.left = Math.min(ev.clientX - host.left + 12, host.width - 150) + 'px'; tip.style.top = (ev.clientY - host.top - 34) + 'px';
+      });
+      r.addEventListener('mouseleave', () => { $('tip').hidden = true; });
+      r.addEventListener('click', () => { ti = +r.dataset.i - 1; render(); });
+    });
+    $('legend').innerHTML = `<span><i style="background:var(--p0)"></i>P0 ${esc(game.wonders[0])}</span><span><i style="background:var(--p1)"></i>P1 ${esc(game.wonders[1])}</span>`;
+    const f = game.final;
+    const tie = f.winner >= 0 && f.scores[0] === f.scores[1] ? ' (equal score: more stages built wins)' : '';
+    $('final').innerHTML = `<span>Result: <b>${f.winner < 0 ? 'draw' : `P${f.winner} ${esc(game.wonders[f.winner])} wins`}</b> ${f.scores[0]}–${f.scores[1]} after ${f.turns} turns${tie}</span><span>seed ${game.seed} · ${Math.round(f.seconds / 60)} min of thinking</span>`;
+  }
+
+  function buildTabs() {
+    $('games').innerHTML = GAMES.map((g, i) => {
+      const f = g.final;
+      const tie = f.winner >= 0 && f.scores[0] === f.scores[1] ? ' on stages' : '';
+      const res = f.winner < 0 ? `draw ${f.scores[0]}–${f.scores[1]}` : `P${f.winner} wins${tie} ${f.scores[0]}–${f.scores[1]} · ${f.turns} turns`;
+      return `<button type="button" role="tab" class="game-tab" id="tab${i}" aria-selected="${i === gi}"><span class="eyebrow">Game ${i + 1} · seed ${g.seed}</span><span class="t display">${esc(g.wonders[0])} vs ${esc(g.wonders[1])}</span><span class="r">${res}</span></button>`;
+    }).join('');
+    GAMES.forEach((_, i) => $('tab' + i).addEventListener('click', () => { gi = i; ti = 0; render(); }));
+  }
+
+  $('prev').addEventListener('click', () => { if (ti > 0) { ti--; render(); } });
+  $('next').addEventListener('click', () => { if (ti < GAMES[gi].turns.length - 1) { ti++; render(); } });
+  $('turn').addEventListener('input', e => { ti = +e.target.value - 1; render(); });
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    if (e.key === 'ArrowLeft') { if (ti > 0) { ti--; render(); } e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { if (ti < GAMES[gi].turns.length - 1) { ti++; render(); } e.preventDefault(); }
+    else if (e.key === 'Home') { ti = 0; render(); e.preventDefault(); }
+    else if (e.key === 'End') { ti = GAMES[gi].turns.length - 1; render(); e.preventDefault(); }
+  });
+
+  function start(data) {
+    if (data && Number.isInteger(data.gi) && GAMES[data.gi]) { gi = data.gi; ti = Math.min(data.ti || 0, GAMES[gi].turns.length - 1); }
+    buildTabs(); render();
+  }
+  if (window.claude && window.claude.hot && window.claude.hot.snapshot) window.claude.hot.snapshot(() => ({ gi, ti }));
+  if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start); else start({});
+})();
+</script>
