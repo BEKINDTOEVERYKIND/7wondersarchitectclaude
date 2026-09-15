@@ -343,6 +343,33 @@ strongest configuration; the next
 lever is search-generated (off-policy) positions for the value head — `scripts/selfplay_chunks.py`
 with the hybrid evaluator produces them, at about 5 games per minute on this box.
 
+### Are the heuristic's card values "points"?  (user question, 2026-09-15)
+
+No — they are *ranking scores* in VP-like units, and they are deliberately inflated relative
+to the points a card ends up scoring.  A player finishes with about 42 points from about 30
+cards (1.4 VP per card), whereas the heuristic values an early resource at 7.5 and an early
+green at 8.5.  The inflation is the value of *tempo*: completing a stage is worth its VP plus 5
+(`tempo_bonus`), and a green card is worth its share of the best obtainable token, which is
+itself valued by the extra cards it yields over the rest of the game.  Compressing the values
+towards points loses in paired self-play (3 000 deals, both seats, vs the tuned defaults):
+
+| variant | idea | score |
+|---|---|---|
+| `res_unit=0.35` | resource ≈ 2.6 < a 3-VP card | 41.4 % |
+| `res_unit=0.5` | resource ≈ 3.7 | 45.2 % |
+| `w_blue=2.5` / `1.8` | blue cards worth 2.5× / 1.8× their printed VP | 45.6 % / 47.3 % |
+| `perm_shield_bonus=3.0` / `1.5` | hornless shield ≈ 8.5 / 7 (like a green) | 45.1 % / 47.4 % |
+| `res_unit=0.4 perm_shield_bonus=2.0` (± `w_blue=1.5`) | greens and shields on top, resources below a 3-VP card | 39.5 % / 39.4 % |
+
+Note the margins: several of the losing variants score *more points on average* (positive mean
+margin) while winning fewer games — they collect points instead of racing the Wonder, and the
+player who completes five stages first ends the game while ahead.  That race is what the
+inflated resource and green values encode, so "points per card" understates them.  The
+ordering the user proposed (greens and hornless shields best at the start) is already the
+model's ordering at game start (green 8.5 > coin 8.3 > resource 7.5 > hornless shield 5.9 >
+cat card 3.8 > 3-VP card 3.0 > horn cards 2.7), except that resources sit above blue cards —
+and every attempt to lower them below a 3-VP card lost.
+
 ### Reproducing
 
 ```
