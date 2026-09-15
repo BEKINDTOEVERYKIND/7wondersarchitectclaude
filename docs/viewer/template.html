@@ -268,12 +268,13 @@
     const decks = tb.decks.map((d, i) => {
       const who = i === 2 ? 'central deck' : `${names[i]} deck (P${i})`;
       let top;
-      if (i === 2) top = d.top ? `${KIND[d.top][0]} <span class="who">peeked by ${d.known_to.map(p => 'P' + p).join(', ')}</span>` : (d.size ? 'face down' : 'empty');
+      if (i === 2) top = d.top ? `${KIND[d.top][0]} <span class="who">known to ${d.known_to.map(p => 'P' + p).join(', ')} (Cat peek)</span>` : (d.size ? 'face down' : 'empty');
       else top = d.top ? KIND[d.top][0] : (d.size ? '?' : 'empty');
       return `<div class="deck"><div class="who">${esc(who)}</div><div class="n">${d.size} <span class="who">cards</span></div><div>${top}</div></div>`;
     }).join('');
     const conflict = `<span class="conflict" aria-label="${tb.conflict} of ${tb.conflict_max} conflict tokens">${Array.from({ length: tb.conflict_max }, (_, i) => `<i class="${i < tb.conflict ? 'on' : ''}"></i>`).join('')}</span>`;
-    const decs = t.decisions.map(d => {
+    const peek = t.peek ? `<div class="dec" style="--pc: var(--p${t.mover})"><div class="q"><div class="what"><span class="badge p${t.mover}">P${t.mover}</span> Start of turn: holds the Cat and peeks at the central deck</div></div><div class="gain">top card is ${chipsHtml({ [t.peek]: 1 })}</div></div>` : '';
+    const decs = peek + t.decisions.map(d => {
       const maxV = Math.max(0, ...d.options.map(o => o.visits || 0));
       const opts = d.options.slice().sort((a, b) => (b.visits || 0) - (a.visits || 0)).map(o => optHtml(o, o.action === d.chosen, maxV)).join('');
       const rv = d.root_value !== null && d.root_value !== undefined ? `search value ${d.root_value >= 0 ? '+' : ''}${d.root_value.toFixed(2)} · ${d.seconds}s` : '';
@@ -285,7 +286,7 @@
       <div class="table-row">${decks}</div>
       <div class="status"><span>Conflict ${tb.conflict}/${tb.conflict_max}${conflict}</span><span>Cat: ${tb.cat < 0 ? 'in the middle' : 'P' + tb.cat}</span><span>Token stack ${tb.stack}</span></div>
       <div class="status"><span>Face-up tokens: ${tb.faceup.length ? tb.faceup.map(x => `<span class="tok">${esc(x)}</span>`).join(' ') : '<span class="none">none left</span>'}</span></div>
-      <div class="eyebrow" style="margin-top:4px">Decisions this turn (P${t.mover}) · bars = search visits, Q = expected result for the mover</div>
+      <div class="eyebrow" style="margin-top:4px">This turn (P${t.mover}) · bars = search visits, Q = expected result for the mover</div>
       <div class="log">${decs || '<span class="none">no real choice this turn (everything was forced)</span>'}</div>`;
   }
 

@@ -141,8 +141,17 @@ def main():
         obs = env.observe(p)
         if obs.turn != last_turn:
             last_turn = obs.turn
-            cur = {"turn": obs.turn + 1, "mover": p, "start": {"players": [player_snapshot(obs, 0), player_snapshot(obs, 1)],
-                                                              "table": table_snapshot(obs)}, "decisions": [], "events": []}
+            # The Cat holder's peek happens at the start of THIS turn (the environment resolved it right after the
+            # previous step): attribute it here and hide it from the previous turn's end-of-turn table.
+            peek = KINDS[obs.deck_top[CENTRAL]].name if (obs.cat == p and obs.knows_central(p)) else None
+            if peek is not None and cur is not None:
+                prev = cur["end"]["table"]["decks"][CENTRAL]
+                prev["known_to"] = [x for x in prev["known_to"] if x != p]
+                if not prev["known_to"]:
+                    prev["top"] = None
+            cur = {"turn": obs.turn + 1, "mover": p, "peek": peek,
+                   "start": {"players": [player_snapshot(obs, 0), player_snapshot(obs, 1)], "table": table_snapshot(obs)},
+                   "decisions": [], "events": []}
             game["turns"].append(cur)
         legal = list(obs.legal_actions())
         before_cards = [list(env.state.cards[0]), list(env.state.cards[1])]
