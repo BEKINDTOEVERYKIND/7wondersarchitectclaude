@@ -14,18 +14,24 @@ from sevenwa.agents.random_agent import RandomAgent
 from sevenwa.engine.actions import Actions as A
 from sevenwa.engine.cards import KIND_BY_NAME
 from sevenwa.engine.env import make_env
-from sevenwa.engine.state import (CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_PAY, D_PICK, D_SCIENCE, D_TOKEN,
-                                  DECISION_NAMES, GameState)
+from sevenwa.engine.state import (C_PEEK, C_REVEAL, C_TOKEN_REVEAL, CENTRAL, D_HALI_CHOOSE, D_HALI_DECK, D_PAY,
+                                  D_PICK, D_SCIENCE, D_TOKEN, DECISION_NAMES, GameState)
 from sevenwa.engine.tokens import TOKEN_BY_NAME
 from sevenwa.engine.wonders import WONDER_BY_NAME
 
-from conftest import first_n  # noqa: E402  (tests/conftest.py)
+from conftest import edit as edit_copy, first_n, first_pick, run, set_faceup, settle  # noqa: E402  (tests/conftest.py)
 from sevenwa.train.arena import play_match
 
 K = KIND_BY_NAME
 GIZA = WONDER_BY_NAME["Giza"].id
 RHODES = WONDER_BY_NAME["Rhodes"].id
 HALI = WONDER_BY_NAME["Halicarnassus"].id
+BABYLON = WONDER_BY_NAME["Babylon"].id
+
+
+def _tok(name: str) -> int:
+    """Token action for the face-up Progress token ``name``."""
+    return A.TOKEN_BASE + TOKEN_BY_NAME[name].id
 
 
 # --------------------------------------------------------------------------- helpers
@@ -48,27 +54,31 @@ def _collect_states(num_games: int, seed: int, wonders=None, mix: str = "mixed")
     return states
 
 
-def _p0_with_cards(counts, stage: int = 0, tokens=()):
+def _p0_with_cards(counts, stage: int = 0, tokens=(), faceup=None, wonders=(GIZA, RHODES), built=None, edit=None):
     """Synthetic state: player 0 (Giza, at the given stage) holds the given cards (and Progress
     tokens, by name) at the first decision, and the mandatory checks (science sets /
     construction) have been re-run.
 
     Cards are moved from the central deck into the tableau and tokens out of the face-up row /
-    stack so the state stays consistent.
+    stack so the state stays consistent.  ``faceup`` (token names) replaces the face-up row,
+    ``built`` overrides player 0's built-mask (default: the first ``stage`` stages) and ``edit(t)``
+    may change anything else (the opponent's tableau...) before the checks run.
     """
-    s = GameState.initial((GIZA, RHODES))
+    s = GameState.initial(wonders)
     # resolve chance nodes with fixed outcomes until the first decision
     while s.is_chance():
         s = s.apply_chance(s.chance_outcomes()[0][0])
     assert s.to_move() == 0 and s.dkind == D_PICK
     t = s._copy()
-    t.built[0] = first_n(stage)
+    t.built[0] = first_n(stage) if built is None else built
     for name, c in counts.items():
         k = K[name].id
         assert t.unseen[CENTRAL][k] >= c, name
         t.cards[0][k] += c
         t.unseen[CENTRAL][k] -= c
         t.deck_size[CENTRAL] -= c
+    if faceup is not None:
+        set_faceup(t, [TOKEN_BY_NAME[n].id for n in faceup])
     for name in tokens:
         tid = TOKEN_BY_NAME[name].id
         if tid in t.faceup:
@@ -78,10 +88,58 @@ def _p0_with_cards(counts, stage: int = 0, tokens=()):
             t.prog_unseen[tid] -= 1
             t.prog_stack -= 1
         t.tokens[0][tid] += 1
+    if edit is not None:
+        edit(t)
     t.node_type = -1
     t.queue = (("check",),) + t.queue
     t._run()
     return t
+
+
+def _give_p1(t: GameState, name: str, c: int = 1) -> None:
+    """Move ``c`` cards of kind ``name`` from the central deck into player 1's tableau."""
+    k = K[name].id
+    assert t.unseen[CENTRAL][k] >= c, name
+    t.cards[1][k] += c
+    t.unseen[CENTRAL][k] -= c
+    t.deck_size[CENTRAL] -= c
+
+
+def _hold_token(t: GameState, p: int, name: str) -> None:
+    """Give player ``p`` a copy of token ``name`` from the stack (the face-up row is untouched)."""
+    tid = TOKEN_BY_NAME[name].id
+    assert t.prog_unseen[tid] > 0, name
+    t.prog_unseen[tid] -= 1
+    t.prog_stack -= 1
+    t.tokens[p][tid] += 1
+
+
+def _peeked_state(holder: int, tc: int, tops=(K["wood"].id, K["stone"].id)) -> GameState:
+    """``holder`` holds the Cat and peeks ``tc`` (the central top) at their turn start.  With
+    ``holder == 1`` P1 then takes their own deck's top, so the result is P0's main pick with a
+    central top known to P1 only (an in-tree state; ``Environment.observe(0)`` would hide it)."""
+    s = first_pick(tops=tops)
+    c = edit_copy(s)
+    c.cat = holder
+    c.mover = holder
+    c = run(c, ("turn_start",))
+    assert c.is_chance() and c.ckind == C_PEEK, c.describe_node()
+    c = c.apply_chance(tc)
+    assert c.dkind == D_PICK and c.mover == holder and c.deck_top[CENTRAL] == tc and c.knows_central(holder)
+    if holder == 1:
+        c = settle(c.apply_action(A.PICK_LEFT))
+        assert c.dkind == D_PICK and c.mover == 0, c.describe_node()
+        assert c.deck_top[CENTRAL] == tc and c.knows_central(1) and not c.knows_central(0)
+    return c
+
+
+def _hide_central(c: GameState) -> GameState:
+    """Player 0's own observation of ``c``: the central top is hidden (as ``Environment.observe``)."""
+    o = edit_copy(c)
+    o.unseen[CENTRAL][o.deck_top[CENTRAL]] += 1
+    o.deck_top[CENTRAL] = -1
+    o.central_known_to = c.central_known_to & ~1
+    return o
 
 
 def _science_state(counts):
@@ -171,16 +229,20 @@ def test_heuristic_action_is_fast():
 
 
 # --------------------------------------------------------------------------- behaviour
-def _forced_start(deck0_top: str, deck1_top: str):
-    """Initial Giza-vs-Rhodes state with chosen visible tops, resolved to P0's first pick."""
-    s = GameState.initial((GIZA, RHODES))
+def _forced_start(deck0_top: str, deck1_top: str, wonders=(GIZA, RHODES), faceup=None):
+    """Initial (Giza-vs-Rhodes) state with chosen visible tops (and face-up tokens, by name),
+    resolved to P0's first pick."""
+    s = GameState.initial(wonders)
     wanted = {0: K[deck0_top].id, 1: K[deck1_top].id}
+    toks = [TOKEN_BY_NAME[n].id for n in (faceup or ())]
     while s.is_chance():
         outs = s.chance_outcomes()
         pick = outs[0][0]
-        if s.ckind == 0 and s.cctx in wanted:  # C_REVEAL of a wonder deck
+        if s.ckind == C_REVEAL and s.cctx in wanted:  # C_REVEAL of a wonder deck
             pick = wanted[s.cctx]
-            assert any(o == pick for o, _ in outs)
+        elif s.ckind == C_TOKEN_REVEAL and toks:
+            pick = toks.pop(0)
+        assert any(o == pick for o, _ in outs)
         s = s.apply_chance(pick)
     assert s.to_move() == 0 and s.dkind == D_PICK
     return s
@@ -319,3 +381,149 @@ def test_prior_temperature_controls_sharpness():
     flat = heuristic_prior(s, temperature=100.0)
     assert sharp.max() > flat.max()
     assert abs(float(flat[list(s.legal_actions())].min()) - 1.0 / 3.0) < 0.05
+
+
+# --------------------------------------------------------------------------- end-game tokens / stages
+def test_token_that_forces_a_losing_fifth_stage_is_avoided():
+    """P0 (Giza, 4 stages = 22 VP) holds wood x2 + stone x2: with Engineering the 4-different last stage
+    becomes affordable, the build is mandatory and the game ends 30-31 -- a loss on the spot.  P1
+    (Rhodes, 4 stages + civ3 x4 = 31) holds glass x4, so Engineering also hands *them* a winning
+    build: the denial term alone would make P0 grab the token."""
+    def opp(t):
+        t.built[1] = first_n(4)
+        _give_p1(t, "civ3", 4)
+        _give_p1(t, "glass", 4)
+    t = _p0_with_cards({"tablet": 2, "wood": 2, "stone": 2}, stage=4, faceup=("Engineering", "Urbanism", "Crafts"),
+                       edit=opp)
+    assert t.dkind == D_TOKEN and t.scores() == (22, 31)
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    eng = _tok("Engineering")
+    d = dict(zip(*score_actions(t, P)))
+    others = [x for a, x in d.items() if a != eng]
+    assert d[eng] < min(others) - P.lose_penalty / 4, d
+    assert heuristic_action(t, None, P) != eng
+    # control: ahead on points the forced build *wins* -> Engineering is by far the best token
+    t = _p0_with_cards({"tablet": 2, "wood": 2, "stone": 2}, stage=4, faceup=("Engineering", "Urbanism", "Crafts"))
+    assert t.dkind == D_TOKEN and t.scores() == (22, 0)
+    d = dict(zip(*score_actions(t, P)))
+    assert d[eng] > max(x for a, x in d.items() if a != eng) + P.win_bonus / 4
+    assert heuristic_action(t, None, P) == eng
+
+
+def test_babylon_last_stage_token_counts_towards_the_win():
+    """Babylon's 3-identical stage (Progress token) may be constructed last; its token is chosen before
+    the game ends.  P0 (S1, S2, S3, S5 = 15 VP) with stone x2 completes it with the stone on deck 0:
+    20 VP against P1's 22 loses -- unless Decor (6 VP with the Wonder complete) is face-up."""
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    for faceup, wins in ((("Decor", "Urbanism", "Crafts"), True), (("Engineering", "Urbanism", "Crafts"), False)):
+        base = _forced_start("stone", "civ3", wonders=(BABYLON, RHODES), faceup=faceup)
+        t = base._copy()
+        t._legal = base._legal
+        t.built = [0b10111, first_n(4)]
+        t.cards[0][K["stone"].id] = 2
+        _give_p1(t, "civ3", 1)
+        assert t.scores() == (15, 22) and t.available_stages(0) == (3,)
+        d = dict(zip(*score_actions(t, P)))
+        if wins:
+            assert d[A.PICK_LEFT] > P.win_bonus / 2, d
+            assert heuristic_action(t, None, P) == A.PICK_LEFT
+        else:
+            assert d[A.PICK_LEFT] < -P.lose_penalty / 2, d
+            assert heuristic_action(t, None, P) != A.PICK_LEFT
+
+
+def test_endgame_token_choice_takes_the_points():
+    """Once the Wonder is complete (Babylon's token stage built last) the token choice is the last
+    decision of the game: a token is worth exactly the VP it scores, nothing else."""
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    dec, cul, tac = _tok("Decor"), _tok("Culture"), _tok("Tactics")
+    t = _p0_with_cards({"stone": 3}, built=0b10111, faceup=("Decor", "Culture", "Tactics"), wonders=(BABYLON, RHODES))
+    assert t.dkind == D_TOKEN and t.wonder_done and t.dctx == "babylon"
+    d = dict(zip(*score_actions(t, P)))
+    assert (d[dec], d[cul], d[tac]) == (6.0, 4.0, 0.0)  # no Battle pending: Tactics scores nothing
+    assert heuristic_action(t, None, P) == dec
+    # the second Culture (12 - 4) beats Decor; Education adds 2 to every token
+    def hold(t):
+        _hold_token(t, 0, "Culture")
+        _hold_token(t, 0, "Education")
+    t = _p0_with_cards({"stone": 3}, built=0b10111, faceup=("Decor", "Culture", "Tactics"), wonders=(BABYLON, RHODES),
+                       edit=hold)
+    assert t.dkind == D_TOKEN and t.wonder_done
+    d = dict(zip(*score_actions(t, P)))
+    assert (d[dec], d[cul], d[tac]) == (8.0, 10.0, 2.0)
+    assert heuristic_action(t, None, P) == cul
+
+
+def test_decor_beats_culture_at_the_finish_line():
+    """P0 (Giza, 4 stages, 22 VP vs 0) holds 3 different resources: one card completes a *winning*
+    Wonder, so Decor is worth its full 6 VP, while the Culture pair bonus needs time that is gone."""
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    dec, cul = _tok("Decor"), _tok("Culture")
+    hand = {"tablet": 2, "wood": 1, "stone": 1, "clay": 1}
+    t = _p0_with_cards(hand, stage=4, faceup=("Decor", "Culture", "Strategy"))
+    assert t.dkind == D_TOKEN
+    d = dict(zip(*score_actions(t, P)))
+    assert d[dec] > d[cul] + 0.5, d
+    assert heuristic_action(t, None, P) == dec
+    # control: when completing loses (P1 leads 31-30) the race probability applies as before
+    def opp(t):
+        t.built[1] = first_n(4)
+        _give_p1(t, "civ3", 4)
+    t2 = _p0_with_cards(hand, stage=4, faceup=("Decor", "Culture", "Strategy"), edit=opp)
+    assert t2.dkind == D_TOKEN and t2.scores() == (22, 31)
+    d2 = dict(zip(*score_actions(t2, P)))
+    assert d2[dec] < d[dec] - 0.5, (d, d2)
+
+
+# --------------------------------------------------------------------------- hidden information
+def test_pick_ignores_a_central_card_known_only_to_the_opponent():
+    """In-tree states may carry a central top card sampled for the *opponent's* Cat peek.  The mover
+    does not know it: the scores must equal those of the mover's own observation (top hidden),
+    whatever the sampled card is."""
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    ref = None
+    for name in ("wood", "civ3", "shield_h2", "tablet"):
+        s = _peeked_state(1, K[name].id)
+        legal, sc = score_actions(s, P)
+        legal_h, sc_h = score_actions(_hide_central(s), P)
+        assert list(legal) == list(legal_h)
+        assert sc == pytest.approx(sc_h), name
+        if ref is None:
+            ref = sc
+        assert sc == pytest.approx(ref), name
+
+
+# --------------------------------------------------------------------------- tunables
+def test_new_tunables_default_to_the_previous_behaviour():
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    assert (P.blind_token_discount, P.deny_far, P.arch_last_pick) == (1.0, 1.0, 1.0) and P.deny_hidden_central < 0
+    hand = {"tablet": 2, "wood": 1, "stone": 1, "clay": 1}
+    t = _p0_with_cards(hand, stage=4, faceup=("Decor", "Culture", "Strategy"))
+    assert t.dkind == D_TOKEN and not any(t.cards[1][K[g].id] for g in ("tablet", "gear", "compass"))
+    d = dict(zip(*score_actions(t, P)))
+    # (1) blind_token_discount scales the blind-stack expectation (mine, and the opponent's reply)
+    d1 = dict(zip(*score_actions(t, replace(P, blind_token_discount=0.5))))
+    assert d1[A.TOKEN_BLIND] < d[A.TOKEN_BLIND] - 0.5
+    assert all(d1[a] >= d[a] for a in d if a != A.TOKEN_BLIND)
+    # (2) deny_far: the opponent holds no green card -> deny_far = 0 removes the denial altogether;
+    #     with a pair in their tableau the denial is full whatever deny_far says
+    d2 = dict(zip(*score_actions(t, replace(P, deny_far=0.0))))
+    assert all(d2[a] > d[a] + 0.5 for a in d), (d, d2)
+    tp = edit_copy(t)
+    _give_p1(tp, "gear", 2)
+    assert dict(zip(*score_actions(tp, P))) == dict(zip(*score_actions(tp, replace(P, deny_far=0.0))))
+    # (3) deny_hidden_central: P0 peeked a wood the opponent (Rhodes, empty) wants more than the blue tops
+    s = _peeked_state(0, K["wood"].id, tops=(K["civ3"].id, K["civ2cat"].id))
+    d3 = dict(zip(*score_actions(s, P)))
+    assert d3 == dict(zip(*score_actions(s, replace(P, deny_hidden_central=P.deny))))
+    d3b = dict(zip(*score_actions(s, replace(P, deny_hidden_central=0.0))))
+    assert d3b[A.PICK_CENTER] == d3[A.PICK_CENTER]
+    assert d3b[A.PICK_LEFT] > d3[A.PICK_LEFT] + 0.5 and d3b[A.PICK_RIGHT] > d3[A.PICK_RIGHT] + 0.5, (d3, d3b)
+    # (4) arch_last_pick: the pick after the *last* stage
+    t4 = _p0_with_cards(hand, stage=4, faceup=("Architecture", "Decor", "Strategy"))
+    assert t4.dkind == D_TOKEN
+    arch = _tok("Architecture")
+    d4 = dict(zip(*score_actions(t4, P)))
+    d4b = dict(zip(*score_actions(t4, replace(P, arch_last_pick=0.0))))
+    assert d4b[arch] < d4[arch] - 1.0 and d4b[_tok("Decor")] == d4[_tok("Decor")]
+    assert dict(zip(*score_actions(t4, replace(P, arch_last_pick=1.0)))) == d4

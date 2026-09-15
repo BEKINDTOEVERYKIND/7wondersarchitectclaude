@@ -115,6 +115,8 @@ class HeuristicParams:
     # --- progress tokens
     tok_extra_scale: float = 0.9     # scale of extra-card tokens (uncertainty / time); A/B-tuned (was 0.6)
     builds_per_turn: float = 0.35    # expected stage completions per remaining turn
+    arch_last_pick: float = 1.0      # Architecture: worth of the pick that follows the *last* stage (0 = none)
+    blind_token_discount: float = 1.0  # multiplier of the blind-stack expectation (uncertainty)
     res_tok_freq: float = 0.22       # fraction of future picks triggering a resource token
     green_tok_freq: float = 0.15
     horn_tok_freq: float = 0.12
@@ -128,11 +130,13 @@ class HeuristicParams:
     p_complete_trailer: float = 0.3
     culture_second_bonus: float = 2.0
     deny_token: float = 0.35
+    deny_far: float = 1.0            # token denial factor when the opponent holds no green card (1.0 = full denial);
+    #                                  with some green but no set yet the factor is the midpoint (1 + deny_far) / 2
     # --- military
     pb_base: float = 0.2             # P(battle happens) = base + per_turn*turns_left + per_conflict*conflict
     pb_per_turn: float = 0.04
     pb_per_conflict: float = 0.2
-    pb_max: float = 0.9
+    pb_max: float = 0.5             # A/B-tuned 2026-09-15 (was 0.9): 51.2% [50.3-52.1] over 12 000 paired games
     horn_accel: float = 0.12         # extra battle probability per horn
     mil_lookahead: int = 2           # a shield may be the first of k needed to change the battle outcome; A/B-tuned (was 3)
     mil_step_discount: float = 0.8   # per additional shield still needed
@@ -142,6 +146,7 @@ class HeuristicParams:
     # --- denial / lookahead
     deny: float = 0.55               # weight of the opponent's best reply (visible cards)
     deny_reveal: float = 0.3         # weight of the expected value of the card my pick reveals to them
+    deny_hidden_central: float = -1.0  # weight of a central top I know (Cat peek) but the opponent does not; < 0: deny
     pick_rate: float = 0.7           # useful resource cards per turn (game-length estimate)
     max_turns: float = 16.0
     # --- payment
@@ -417,6 +422,25 @@ def _phi(c0: int, c1: int, c2: int, T: float, phi1: float, phi2: float) -> float
     return best
 
 
+# --------------------------------------------------------------------------- end-game token VP
+def _token_end_vp(v: _View, t, complete: bool) -> float:
+    """VP that token ``t`` (an engine ``Token``) scores at once for a player whose game is ending
+    (``complete``: the Wonder is / will be complete).  Education's per-token bonus for the tokens
+    already held is *not* included (``v.edu`` applies to any new token)."""
+    kind = t.kind
+    if kind == K_VP_WONDER:
+        return float(t.vp_complete if complete else t.vp_incomplete)
+    if kind == K_CULTURE:
+        return float(t.vp_both - t.vp_one if v.toks[t.id] >= 1 else t.vp_one)
+    if kind == K_VP_PROG:
+        return float(t.vp * (v.n_tokens + 1))
+    if kind == K_VP_CAT:
+        return float(t.vp * v.cat_cards)
+    if kind == K_VP_MIL:
+        return float(t.vp * v.mil)
+    return 0.0
+
+
 # --------------------------------------------------------------------------- evaluation context
 class _Ctx:
     """Everything the scorers need, computed lazily once per decision."""
@@ -513,8 +537,7 @@ class _Ctx:
         b = cache.get(tg.idx)
         if b is not None:
             return b
-        s, P = self.s, self.P
-        o = self.views[1 - p]
+        P = self.P
         extra = P.extra_card_value
         eff = tg.effect
         if eff == E_SHIELD:
@@ -537,14 +560,38 @@ class _Ctx:
                 plain += extra
         total = plain
         if v.n_built == 4:
-            final = v.score + tg.vp + (_DECOR_BONUS if v.has_decor else 0)
-            if final > o.score or (final == o.score and s.rules.tiebreak_stages):
+            if self.fifth_wins(p, tg):
                 total += P.win_bonus
             else:
                 total -= P.lose_penalty
         b = (plain, total)
         cache[tg.idx] = b
         return b
+
+    def end_token_vp(self, p: int) -> float:
+        """VP the best *face-up* Progress token scores at once for player ``p`` when the game ends
+        this turn with the Wonder complete (the blind stack is ignored, conservatively); any token
+        also carries the Education bonus of the tokens held."""
+        s = self.s
+        v = self.views[p]
+        if not s.faceup:
+            return float(v.edu) if s.prog_stack > 0 else 0.0
+        best = 0.0
+        for t in s.faceup:
+            x = _token_end_vp(v, TOKENS[t], True)
+            if x > best:
+                best = x
+        return best + v.edu
+
+    def fifth_wins(self, p: int, tg: _Target) -> bool:
+        """Does completing the Wonder with ``tg`` (the 5th stage) win the game for ``p``?  The
+        opponent gets no further turn; a Babylon last stage still chooses its token before the end."""
+        v = self.views[p]
+        o = self.views[1 - p]
+        final = v.score + tg.vp + (_DECOR_BONUS if v.has_decor else 0)
+        if tg.effect == E_TOKEN:
+            final += self.end_token_vp(p)
+        return final > o.score or (final == o.score and self.s.rules.tiebreak_stages)
 
     def ends_game(self, p: int) -> Optional[List[bool]]:
         """Per kind: does taking that card complete player ``p``'s 5th stage (None if not at stage 5)."""
@@ -567,13 +614,20 @@ class _Ctx:
         fb = P.builds_per_turn * tl
         if fb > stages_left:
             fb = float(stages_left)
+        # Architecture: the pick after the last stage may be worth less (the game ends at once)
+        fb_arch = fb
+        cap = stages_left - 1.0 + P.arch_last_pick
+        if cap < 0.0:
+            cap = 0.0
+        if fb_arch > cap:
+            fb_arch = cap
         edu = float(v.edu)
         sm, so = v.shields, o.shields
         out = [0.0] * NUM_TOKEN_TYPES
         for t in TOKENS:
             kind = t.kind
             if kind == K_EXTRA_ON_BUILD:
-                val = extra * fb
+                val = extra * fb_arch
             elif kind == K_EXTRA_ON_RESOURCE:
                 val = extra * P.res_tok_freq * tl
             elif kind == K_EXTRA_ON_GREEN:
@@ -592,7 +646,15 @@ class _Ctx:
             elif kind == K_VP_PROG:
                 val = t.vp * (v.n_tokens + 1 + P.future_tokens)
             elif kind == K_VP_WONDER:
-                pc = P.p_complete_leader if v.cards_needed <= o.cards_needed else P.p_complete_trailer
+                # at the finish line (complete, or one card away from a winning completion) the Wonder
+                # will be complete: no race probability
+                if stages_left == 0 or (v.n_built == 4 and v.tgt is not None and v.tgt.deficit <= 1
+                                        and self.fifth_wins(p, v.tgt)):
+                    pc = 1.0
+                elif v.cards_needed <= o.cards_needed:
+                    pc = P.p_complete_leader
+                else:
+                    pc = P.p_complete_trailer
                 val = t.vp_incomplete + (t.vp_complete - t.vp_incomplete) * pc
             elif kind == K_VP_CAT:
                 val = t.vp * (v.cat_cards + P.future_cat_cards)
@@ -602,7 +664,7 @@ class _Ctx:
                 else:
                     val = float(t.vp_one)
                     if o.toks[t.id] == 0 and (s.prog_unseen[t.id] > 0 or t.id in s.faceup):
-                        val += P.culture_second_bonus
+                        val += P.culture_second_bonus * self.sci_time  # the second copy needs time
             else:  # pragma: no cover - unknown token kind
                 val = 1.0
             out[t.id] = val + edu
@@ -616,7 +678,7 @@ class _Ctx:
                 c = un[t]
                 if c:
                     acc += out[t] * c
-            blind = acc / s.prog_stack
+            blind = acc / s.prog_stack * P.blind_token_discount
         self._blind[p] = blind
         best = blind if s.prog_stack > 0 else 0.0
         for t in s.faceup:
@@ -624,20 +686,25 @@ class _Ctx:
                 best = out[t]
         self._T[p] = best * P.sci_token_factor
         self._tok_ready[p] = True
-        # a token that makes the current stage affordable right now triggers the mandatory build
-        # (applied after T/blind are published so build_value -> best_token cannot recurse)
-        imm_eng = 0.0
-        imm_econ = 0.0
+        # a token that makes a stage affordable right now triggers the mandatory build (applied after
+        # T/blind are published so build_value -> best_token cannot recurse).  A *losing* 5th stage has
+        # a negative total: the build is forced and immediate, so the loss counts in full.
+        imm_eng = None
+        imm_econ = None
         for tg in v.targets:
             if tg.deficit <= 0:
                 continue
             if not v.eng and _maxval(v.grey, v.coins, v.econ, 2) >= tg.cost:
-                x = P.tok_immediate_build * self.build_value(p, tg)[1]
-                if x > imm_eng:
+                x = self.build_value(p, tg)[1]
+                if x > 0.0:
+                    x *= P.tok_immediate_build
+                if imm_eng is None or x > imm_eng:
                     imm_eng = x
             if not v.econ and v.coins >= 1 and tg.deficit == 1:
-                x = P.tok_immediate_build * self.build_value(p, tg)[1]
-                if x > imm_econ:
+                x = self.build_value(p, tg)[1]
+                if x > 0.0:
+                    x *= P.tok_immediate_build
+                if imm_econ is None or x > imm_econ:
                     imm_econ = x
         if imm_eng:
             for t in _ENG_IDS:
@@ -933,23 +1000,23 @@ def _score_pick(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
         tc = top[CENTRAL]
         if tc >= 0 and _knows_central(s, m):
             my_src[CENTRAL] = vme[tc]
-            opp_top[CENTRAL] = deny * vop[tc]
+            # a card only I know (Cat peek) is a blind draw for the opponent
+            dh = P.deny_hidden_central
+            if dh < 0.0 or _knows_central(s, om):
+                dh = deny
+            opp_top[CENTRAL] = dh * vop[tc]
             if ends is not None and ends[tc]:
                 cont[CENTRAL] = 0.0
             e = _expect(vop, s.unseen[CENTRAL])
             opp_next[CENTRAL] = deny_r * e if e is not None else _NEG
         else:
             un = s.unseen[CENTRAL]
-            if tc >= 0:  # sampled for the opponent: treat as unseen for me
+            if tc >= 0:  # sampled for the opponent (in-tree): unseen for me -- use only my belief
                 un = list(un)
                 un[tc] += 1
-                opp_top[CENTRAL] = deny * vop[tc]
-                e = _expect(vop, s.unseen[CENTRAL])
-                opp_next[CENTRAL] = deny_r * e if e is not None else _NEG
-            else:
-                e = _expect(vop, un)
-                opp_top[CENTRAL] = deny_r * e if e is not None else _NEG
-                opp_next[CENTRAL] = opp_top[CENTRAL]
+            e = _expect(vop, un)
+            opp_top[CENTRAL] = deny_r * e if e is not None else _NEG
+            opp_next[CENTRAL] = opp_top[CENTRAL]
             e = _expect(vme, un)
             my_src[CENTRAL] = e if e is not None else 0.0
             if ends is not None:
@@ -1160,8 +1227,39 @@ def _score_science(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
     return out
 
 
+def _score_token_endgame(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
+    """Token choice after the mover completed the Wonder (Babylon's last stage, a science set of the
+    same turn): the game ends at the end of this turn, so a token is worth exactly the VP it scores
+    (Tactics only if a Battle is still pending) and the opponent never replies."""
+    s = ctx.s
+    m = s.mover
+    v = ctx.views[m]
+    edu = float(v.edu)
+    out = []
+    for a in legal:
+        if a == A.TOKEN_BLIND:
+            acc = 0.0
+            un = s.prog_unseen
+            for t in TOKENS:
+                c = un[t.id]
+                if c:
+                    acc += _token_end_vp(v, t, True) * c
+            out.append(acc / s.prog_stack + edu if s.prog_stack > 0 else 0.0)
+        else:
+            t = TOKENS[a - A.TOKEN_BASE]
+            val = _token_end_vp(v, t, True) + edu
+            if t.kind == K_SHIELDS and s.battle_pending:  # the Battle is fought before the game ends
+                o = ctx.views[1 - m]
+                val += (_mil_diff(v, o, v.shields + t.shields, o.shields, s.rules)
+                        - _mil_diff(v, o, v.shields, o.shields, s.rules))
+            out.append(val)
+    return out
+
+
 def _score_token(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
     s, P = ctx.s, ctx.P
+    if s.wonder_done:
+        return _score_token_endgame(ctx, legal)
     m = s.mover
     om = 1 - m
     mine = ctx.token_values(m)
@@ -1169,7 +1267,16 @@ def _score_token(ctx: _Ctx, legal: Sequence[int]) -> List[float]:
     blind_me = ctx.blind_token(m)
     blind_opp = ctx.blind_token(om) if s.prog_stack > 0 else _NEG
     faceup = s.faceup
-    deny = P.deny_token
+    # denial matters in proportion to how soon the opponent can take a token: a set in hand (or three
+    # symbols) -> full, some green but no set -> midway, no green -> deny_far
+    c0, c1, c2 = ctx.views[om].sci
+    if c0 >= 2 or c1 >= 2 or c2 >= 2 or (c0 and c1 and c2):
+        ready = 1.0
+    elif c0 or c1 or c2:
+        ready = 0.5 * (1.0 + P.deny_far)
+    else:
+        ready = P.deny_far
+    deny = P.deny_token * ready
     out = []
     for a in legal:
         if a == A.TOKEN_BLIND:

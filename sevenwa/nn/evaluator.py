@@ -3,9 +3,12 @@
 * Encodes states with a user-supplied ``encode(state) -> (features, legal_mask)`` function.
 * Runs the network in ``torch.no_grad`` on CPU (1 thread per worker by default).
 * Caches results by ``state.key()`` (LRU) — chance sampling reaches identical states often.
+* Optionally runs a traced + frozen TorchScript copy of the network (``jit=True``, the default):
+  same outputs, ~25 % less per-call overhead on CPU; falls back to eager mode on any failure.
 """
 from __future__ import annotations
 
+import warnings
 from collections import OrderedDict
 from typing import Callable, Optional, Sequence, Tuple
 
@@ -20,19 +23,49 @@ EncodeFn = Callable[[GameState], Tuple[np.ndarray, np.ndarray]]
 
 class TorchEvaluator:
     def __init__(self, net: PolicyValueNet, encode: EncodeFn, cache_size: int = 200_000,
-                 device: str = "cpu", num_threads: Optional[int] = None, value_temperature: float = 1.0):
+                 device: str = "cpu", num_threads: Optional[int] = None, value_temperature: float = 1.0,
+                 policy_temperature: float = 1.0, jit: bool = True):
         self.net = net.to(device).eval()
         self.encode = encode
         self.device = device
         # Calibration: v' = tanh(atanh(v) / T).  T > 1 shrinks over-confident values towards 0
         # (fitted on held-out data: T ≈ 1.4-1.5 for the imitation networks).
         self.value_temperature = float(value_temperature)
+        # Policy temperature: priors = softmax(logits / T).  T > 1 flattens over-peaked priors
+        # (imitation networks put > 0.95 on one move in a fifth of the decisions), T = 1 is the
+        # raw network policy.
+        self.policy_temperature = float(policy_temperature)
+        if self.policy_temperature <= 0:
+            raise ValueError("policy_temperature must be > 0")
         self.cache: "OrderedDict[bytes, Tuple[np.ndarray, float]]" = OrderedDict()
         self.cache_size = cache_size
         self.calls = 0
         self.hits = 0
         if num_threads is not None:
             torch.set_num_threads(num_threads)
+        self._forward = self.net
+        self.jit_enabled = False
+        if jit:
+            self._try_jit()
+
+    def _try_jit(self) -> None:
+        """Trace + freeze the network; keep eager mode if tracing fails or disagrees."""
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # TorchScript deprecation notices
+                example = torch.zeros(2, self.net.cfg.input_dim, device=self.device)
+                with torch.no_grad():
+                    traced = torch.jit.trace(self.net, example, check_trace=False)
+                    frozen = torch.jit.freeze(traced.eval())
+                    ref = self.net(example)
+                    out = frozen(example)
+            if len(out) != len(ref) or not all(torch.allclose(a, b, atol=1e-5, rtol=1e-4) for a, b in zip(ref, out)):
+                return
+            self._forward = frozen
+            self.jit_enabled = True
+        except Exception:  # any tracing / freezing problem: eager mode is always correct
+            self._forward = self.net
+            self.jit_enabled = False
 
     def clear_cache(self) -> None:
         self.cache.clear()
@@ -59,7 +92,9 @@ class TorchEvaluator:
             enc = [self.encode(states[i]) for i in todo]
             feats = torch.from_numpy(np.stack([e[0] for e in enc]).astype(np.float32)).to(self.device)
             masks = torch.from_numpy(np.stack([e[1] for e in enc]).astype(bool)).to(self.device)
-            logits, v, _ = self.net(feats)
+            logits, v, _ = self._forward(feats)
+            if self.policy_temperature != 1.0:
+                logits = logits / self.policy_temperature
             logits = logits.masked_fill(~masks, -1e9)
             probs = torch.softmax(logits, dim=-1).cpu().numpy()
             if self.value_temperature != 1.0:

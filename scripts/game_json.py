@@ -53,6 +53,34 @@ def table_snapshot(s):
             "discard": {KINDS[k].name: c for k, c in enumerate(s.discard) if c}}
 
 
+def placed_total(s):
+    """Cards that have left the decks for good (both tableaus + the discard pile), per kind.
+
+    Monotone over a game (cards never return to a deck), so the positive deltas across one step are
+    exactly the cards placed by that step -- even when a card is spent immediately by a mandatory
+    build or a science set (a plain tableau delta would miss it).
+    """
+    return [s.cards[0][k] + s.cards[1][k] + s.discard[k] for k in range(len(KINDS))]
+
+
+def fresh_peek(before, after):
+    """Card the Cat holder freshly peeked at when the step ``before -> after`` started a new turn, else None.
+
+    The environment resolves the ``turn_start`` peek right after the step, so ``after`` already carries
+    it.  A peek is *fresh* when the next mover holds the Cat, knows the central top now, and either did
+    not know it before or the central deck shrank (the known card was drawn: the top is a new card).
+    Knowledge that simply survives from an earlier peek is not a peek.
+    """
+    if after.is_terminal() or after.turn == before.turn:
+        return None
+    nxt = after.to_move()
+    if after.cat != nxt or not after.knows_central(nxt):
+        return None
+    if before.knows_central(nxt) and after.deck_size[CENTRAL] == before.deck_size[CENTRAL]:
+        return None
+    return KINDS[after.deck_top[CENTRAL]].name
+
+
 def decision_text(s):
     k = s.dkind
     w = WONDERS[s.wonder[s.mover]]
@@ -136,25 +164,20 @@ def main():
     t0 = time.time()
     last_turn = -1
     cur = None
+    peek = None  # card freshly peeked at by the Cat holder at the start of the turn about to be recorded
     while not env.is_terminal():
         p = env.to_move()
         obs = env.observe(p)
         if obs.turn != last_turn:
             last_turn = obs.turn
-            # The Cat holder's peek happens at the start of THIS turn (the environment resolved it right after the
-            # previous step): attribute it here and hide it from the previous turn's end-of-turn table.
-            peek = KINDS[obs.deck_top[CENTRAL]].name if (obs.cat == p and obs.knows_central(p)) else None
-            if peek is not None and cur is not None:
-                prev = cur["end"]["table"]["decks"][CENTRAL]
-                prev["known_to"] = [x for x in prev["known_to"] if x != p]
-                if not prev["known_to"]:
-                    prev["top"] = None
             cur = {"turn": obs.turn + 1, "mover": p, "peek": peek,
                    "start": {"players": [player_snapshot(obs, 0), player_snapshot(obs, 1)], "table": table_snapshot(obs)},
                    "decisions": [], "events": []}
+            peek = None
             game["turns"].append(cur)
         legal = list(obs.legal_actions())
-        before_cards = [list(env.state.cards[0]), list(env.state.cards[1])]
+        before = env.state
+        before_tot = placed_total(before)
         t1 = time.time()
         action = agents[p].select_action(obs)
         res = getattr(agents[p], "last_result", None)
@@ -176,15 +199,25 @@ def main():
                "seconds": round(time.time() - t1, 2)}
         env.step(action)
         s = env.state
+        after_tot = placed_total(s)
         gained = []
-        for pp in (0, 1):
-            for k in range(len(KINDS)):
-                d = s.cards[pp][k] - before_cards[pp][k]
-                if d > 0:
-                    gained.extend([KINDS[k].name] * d)
+        for k in range(len(KINDS)):
+            d = after_tot[k] - before_tot[k]
+            if d > 0:
+                gained.extend([KINDS[k].name] * d)
         dec["cards_gained"] = gained
         cur["decisions"].append(dec)
-        cur["end"] = {"players": [player_snapshot(s, 0), player_snapshot(s, 1)], "table": table_snapshot(s)}
+        end = {"players": [player_snapshot(s, 0), player_snapshot(s, 1)], "table": table_snapshot(s)}
+        # A fresh Cat peek at the start of the NEXT turn was resolved by the environment inside this step:
+        # attribute it to that turn (recorded when it is opened) and hide it from this turn's end-of-turn table.
+        peek = fresh_peek(before, s)
+        if peek is not None:
+            nxt = s.to_move()
+            deck = end["table"]["decks"][CENTRAL]
+            deck["known_to"] = [x for x in deck["known_to"] if x != nxt]
+            if not deck["known_to"]:
+                deck["top"] = None
+        cur["end"] = end
     s = env.state
     r = env.returns()
     game["final"] = {"players": [player_snapshot(s, 0), player_snapshot(s, 1)], "table": table_snapshot(s),

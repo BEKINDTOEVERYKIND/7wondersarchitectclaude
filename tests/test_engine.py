@@ -487,6 +487,53 @@ class TestCat:
         c5.cat = 0
         assert c5.score_of(0) == 5
 
+    def test_house_rule_extra_peek_learns_the_card_already_on_top(self, base):
+        """``cat_peek_main_draw_only=False``: a player who steals the Cat mid-turn while the opponent's
+        peeked card is still on top *learns* that card before an extra central pick (the card has not
+        changed, so there is no second peek and no card is created or lost)."""
+        rules = RulesConfig(cat_peek_main_draw_only=False)
+        c = edit(first_pick(rules=rules))
+        c.cat = 1  # P1 holds the Cat and has peeked: civ3 is on top of the central deck, known to P1 only
+        set_top(c, CENTRAL, K.civ3)
+        c.central_known_to = 1 << 1
+        give_token(c, 0, T.Architecture)
+        give_many(c, 0, [K.wood, K.stone])  # Giza stage 1 (2 different) is built as soon as a card lands
+        set_top(c, 0, K.civ2cat)
+        comp = initial_composition(c)
+        s = settle(c.apply_action(A.PICK_LEFT))  # civ2cat steals the Cat -> build -> Architecture extra pick
+        assert s.cat == 0 and s.num_stages(0) == 1
+        assert is_pick(s, f"token:{T.Architecture}", 0), s.describe_node()
+        assert s.deck_top[CENTRAL] == K.civ3 and s.central_known_to == 3
+        assert s.knows_central(0) and s.knows_central(1)
+        assert_invariants(s, comp)
+        n_central = s.deck_size[CENTRAL]
+        s = s.apply_action(A.PICK_CENTER)  # the extra draw takes the known card: no chance node
+        assert not s.is_chance() and s.cards[0][K.civ3] == 1 and s.central_known_to == 0
+        assert s.deck_top[CENTRAL] == -1 and s.deck_size[CENTRAL] == n_central - 1
+        assert_invariants(s, comp)
+
+    def test_house_rule_random_games_conserve_cards(self):
+        """``cat_peek_main_draw_only=False`` over random games: every extra-draw peek keeps the card
+        census intact (a peek while a card is already on top must not sample a second one)."""
+        rules = RulesConfig(cat_peek_main_draw_only=False)
+        comp_cache: Dict = {}
+        stats = {"extra_peeks": 0, "turn_peeks": 0}
+
+        def on_step(before: GameState, after: GameState) -> None:
+            comp = comp_cache.setdefault(before.wonder, initial_composition(before))
+            assert_invariants(after, comp)
+            if after.is_chance() and after.ckind == C_PEEK:
+                head = after.queue[0] if after.queue else None
+                if head is not None and head[0] == "pick" and head[1] != "main":
+                    stats["extra_peeks"] += 1
+                else:
+                    stats["turn_peeks"] += 1
+
+        for seed in range(300):
+            final = random_game(seed, rules=rules, on_step=on_step)
+            assert final.is_terminal()
+        assert stats["extra_peeks"] > 0 and stats["turn_peeks"] > 0
+
     def test_holder_extra_draw_from_center_uses_the_known_card(self, base):
         """The peeked card is physically still on top: an extra pick from the center takes it."""
         c = edit(holder_at_pick(base))

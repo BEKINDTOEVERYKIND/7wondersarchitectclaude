@@ -425,9 +425,15 @@ class GameState:
                 return False
             if (not self.rules.cat_peek_main_draw_only and reason != "main" and self.cat == m and CENTRAL in avail
                     and not self.knows_central(m)):
-                # house rule: the Cat holder may also peek before an extra draw
-                self._push(item)
-                return self._set_chance(C_PEEK, None, self.unseen[CENTRAL])
+                # house rule: the Cat holder may also peek before an extra draw (same logic as ``turn_start``)
+                if self.deck_top[CENTRAL] >= 0:
+                    # a card is already on top (peeked by the other player before the Cat changed hands): the
+                    # peek reveals that very card -- no chance node, and no second card is sampled
+                    self.central_known_to |= 1 << m
+                else:
+                    self.central_known_to &= ~(1 << m)
+                    self._push(item)
+                    return self._set_chance(C_PEEK, None, self.unseen[CENTRAL])
             legal = [self._action_of_deck(d) for d in avail]
             if optional:
                 legal.append(A.SKIP)
@@ -499,7 +505,9 @@ class GameState:
         if self.deck_top[CENTRAL] >= 0:  # an in-tree sample known only to the other player: forget it
             self.unseen[CENTRAL][self.deck_top[CENTRAL]] += 1
             self.deck_top[CENTRAL] = -1
-            self.central_known_to = 0
+        # Blind draw: a new, unseen card comes on top, so nobody knows it.  This also drops the public
+        # "the other player has peeked" bit that an observation keeps while hiding the card (env.observe).
+        self.central_known_to = 0
         return self._set_chance(C_DRAW_CENTRAL, reason, self.unseen[CENTRAL])
 
     def _placed(self, k: int, d: int, reason: str) -> None:

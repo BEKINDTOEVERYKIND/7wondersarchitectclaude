@@ -17,7 +17,7 @@ from sevenwa.engine import Actions as A
 from sevenwa.engine import RulesConfig
 from sevenwa.engine.cards import NUM_KINDS
 from sevenwa.engine.env import Environment, make_env
-from sevenwa.engine.state import CENTRAL, D_HALI_CHOOSE, D_HALI_DECK
+from sevenwa.engine.state import C_DRAW_CENTRAL, CENTRAL, D_HALI_CHOOSE, D_HALI_DECK
 
 from conftest import (K, W, assert_invariants, check, edit, first_n, give_many, initial_composition, is_main_pick_of,
                       physical_matches_belief, random_env_game, set_deck, sync_env_to_state)
@@ -164,6 +164,25 @@ class TestHiddenInformation:
         env.step(A.PICK_CENTER)  # forgetting draw in the belief, true card in the environment
         assert env.state.cards[1][top] == n_before + 1
         physical_matches_belief(env)
+
+    def test_blind_central_draw_forgets_the_opponents_peek_fact(self):
+        """In the non-holder's belief a blind central draw puts a new, unseen card on top: the public
+        "the opponent has peeked" fact (kept by ``observe``) must not survive the draw."""
+        env = self.holder_env()
+        env.step(A.PICK_LEFT)  # P0 (holder) passes; P1 to move while P0 still knows the central top
+        other = env.observe(1)
+        assert other.deck_top[CENTRAL] == -1 and other.has_peeked(0) and not other.knows_central(1)
+        s = other.apply_action(A.PICK_CENTER)
+        assert s.is_chance() and s.ckind == C_DRAW_CENTRAL and s.observer == 1
+        assert s.central_known_to == 0 and not s.has_peeked(0)
+        # the drawn card is a Cat card: P1 becomes the holder, so P0's next turn starts without a peek
+        # and nothing may re-clear a stale bit -- nobody has looked at the new top card
+        s = s.apply_chance(K.civ2cat)
+        assert is_main_pick_of(s, 0) and s.cat == 1
+        assert s.deck_top[CENTRAL] == -1 and s.central_known_to == 0
+        assert not s.has_peeked(0) and not s.has_peeked(1)
+        assert_invariants(s)
+        assert env.state.central_known_to == 1 << 0  # the environment itself was never touched
 
     def test_stolen_cat_reveals_the_same_physical_card(self):
         env = self.holder_env()

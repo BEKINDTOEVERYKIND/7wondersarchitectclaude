@@ -11,8 +11,33 @@ Python ≥ 3.10, `numpy`, `torch` (CPU build is enough), `pytest`.  Install with
 | `random` | uniform random legal action |
 | `heuristic[:eps]` | hand-written expert policy (`sevenwa/agents/heuristic.py`), optional ε-greedy noise |
 | `rollout:<sims>[:<playouts>[:random]]` | MCTS with heuristic (default) or random playouts, no network |
-| `net:<ckpt>[:<sims>]` | neural MCTS (PUCT) with the given checkpoint |
+| `net:<ckpt>[:<sims>[:<c_puct>[:<value_T>]]]` | neural MCTS (PUCT) with the given checkpoint (default 200 simulations) |
 | `netraw:<ckpt>` | the network's policy head alone, no search |
+| `hybrid:<ckpt>[:<sims>[:<lam>[:<playouts>]]]` | neural MCTS with leaf values `(1-lam)·net + lam·heuristic playout` (defaults 100, 0.5, 1) |
+
+The positional fields above can be followed (or interleaved, after the checkpoint path) by
+`key=value` options; a token containing `=` is an option, every other token keeps its positional
+meaning.  Every option defaults to the behaviour of the plain spec, so existing spec strings are
+unchanged.  Example:
+
+```
+hybrid:models/imitation_v7.pt:300:0.5:pt=1.5:floor=0.05:root=gumbel:pick=q:batch=8:margin=0.5
+```
+
+| Option | Applies to | Meaning |
+|---|---|---|
+| `pt=<T>` | `net`, `netraw`, `hybrid` | policy temperature: priors = softmax(logits / T).  The imitation networks put > 0.95 on one move in a fifth of the decisions, which starves the other legal moves of root visits; `pt=1.5` flattens them (default 1.0) |
+| `floor=<f>` | search agents | root prior floor: `p ← (1-f)·p + f·uniform(legal)` at the root only, so every legal move keeps a minimum exploration share (default 0) |
+| `root=puct\|gumbel` | search agents | root procedure: PUCT visit counts (default) or Sequential Halving with Gumbel-Top-k (`MCTSAgent(root_mode=...)`) |
+| `pick=visits\|q` | search agents | final move: most visits / argmax of the improved policy (default), or the best Q among the children with at least 25 % of the maximum visit count (`SearchResult.best_action_q`) |
+| `batch=<n>` | search agents | leaves evaluated per evaluator call: `rollout` and `hybrid` default to 1 (one playout per leaf), `net` to 8; larger batches use virtual loss and a single network forward per batch |
+| `margin=<w>` | `hybrid` | playout value = `(1-w)·result + w·tanh(margin/8)` with the final score margin from the mover's perspective — a lower-variance signal than the ±1 result (default 0) |
+| `cpuct=<c>` | search agents | PUCT exploration constant (wins over the positional `<c_puct>` of `net`) |
+| `fpu=<r>` | search agents | first-play-urgency reduction in Q units (default 0.25) |
+| `reuse=chance\|all` | search agents | tree reuse between the agent's decisions only through resolved chance nodes (default) or also across the opponent's decisions (`MCTSConfig.reuse_across_opponent`) |
+
+The network evaluator runs a traced + frozen TorchScript copy of the network (same outputs to
+1e-5, about 25 % faster per call on CPU) and falls back to eager mode if tracing fails.
 
 ## Pipeline
 
@@ -405,6 +430,46 @@ expected value of a random central card (resources 7.5, coins 8.3 …) exceeds a
 green unless a valuable token is face-up.  Whether that habit is right cannot be settled by
 self-play of the same policy — every evaluation here (playouts, imitation value) shares the
 heuristic's style — which is the strongest argument for the network-only route (§ next).
+
+### Value probe and leaf relabelling
+
+Two tools for the off-distribution value question (the search visits lines the heuristic never
+plays, where a learned value extrapolates and a playout does not):
+
+* `scripts/value_probe.py --nets a.pt,b.pt --epsilons 0.1,0.5 --positions 1000 --playouts 8 --every 4`
+  samples decision positions from ε-greedy heuristic games at each ε (0.1 ≈ the imitation
+  distribution, 0.5 = positions the heuristic would never reach by itself), labels each with the
+  mean result / margin of K heuristic playouts from the mover's belief state, and prints per
+  network the value MSE, correlation, mean bias and sign agreement — overall, by turn bucket, by
+  `min(cards_needed)` (the heuristic's count of cards still needed to finish a Wonder) and by
+  decision kind; `z_var` is the MSE of predicting 0.  About 4 ms per playout, so a 1 000-position
+  probe at two ε takes ~30 s.  On 300 positions per ε (seed 0):
+
+  | network | ε | value MSE | corr | bias | sign agreement | margin MSE / corr |
+  |---|---|---|---|---|---|---|
+  | `imitation_v7` | 0.1 | 0.174 | 0.71 | −0.13 | 75.7 % | 22.7 / 0.79 |
+  | `imitation_v7` | 0.5 | 0.150 | 0.77 | −0.08 | 81.9 % | 22.5 / 0.83 |
+  | `value_v8` | 0.1 | 0.132 | 0.75 | −0.04 | 79.4 % | 18.1 / 0.82 |
+  | `value_v8` | 0.5 | 0.139 | 0.78 | −0.01 | 81.2 % | 21.8 / 0.83 |
+
+  Neither network degrades at ε = 0.5 (those positions are more decided: `z_var` 0.35 vs 0.30),
+  `value_v8` removes most of `imitation_v7`'s pessimistic bias, and the weak spots are the same
+  for both: turns 0–20 and positions with 10+ cards still needed (correlation 0.3–0.5, sign
+  agreement 59–73 %) against 0.8+ / ~90 % in the last third of the game.
+* `scripts/leaf_relabel.py --net a.pt --out-dir runs/leaf1/data --games 400 --sims 96 --workers 4
+  --playouts 8 --leaves-per-decision 8 --every 2 --jobs 16` produces value training data from the
+  **search's own tree positions**: the network-only MCTS agent (`net:<ckpt>:<sims>`) plays half its
+  games against itself and half against `heuristic:0.1` (seat alternating); after every
+  `--every`-th search the tree below the root is walked (`Node.state` holds the belief state),
+  the visited decision nodes with ≥ `--min-visits` visits are subsampled to
+  `--leaves-per-decision` with weight `(1 + depth) / √N` (deeper, rarer nodes preferred), and
+  each is labelled from its own mover's perspective with the mean of `--playouts` heuristic
+  playouts, with the heuristic prior as the policy target.  Shards use the self-play format,
+  one per job, and finished jobs are skipped on re-run; train with
+  `scripts/expert_iteration.py --skip-generation --extra-search-glob '<out-dir>/*.npz'`.  At
+  96 simulations the harvested nodes sit 1–2 decisions below the root (mostly the opponent's
+  replies).  Smoke test (`--games 2 --sims 32 --leaves-per-decision 4 --playouts 2`): 71
+  searches, 123 labelled positions in 3 s.
 
 ### Reproducing
 

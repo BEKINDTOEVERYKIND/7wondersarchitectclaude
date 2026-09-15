@@ -32,6 +32,7 @@ def gumbel_search(mcts: MCTS, state, num_simulations: int, max_considered: int =
         raise ValueError("gumbel_search requires a non-terminal decision node")
     if not root.expanded:
         mcts.expand_root(root)
+    mcts.apply_prior_floor(root)  # MCTSConfig.prior_floor (0 = off): bounds the root logits from below
     sign = 1 if root.to_move == 0 else -1
     actions = list(root.priors.keys())
     logits = np.log(np.array([root.priors[a] for a in actions], dtype=np.float64) + 1e-12)

@@ -26,6 +26,7 @@ Design
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
@@ -64,6 +65,14 @@ class MCTSConfig:
     max_chance_depth: int = 64  # guard against pathological chance chains
     value_scale: float = 1.0
     reuse_tree: bool = True
+    # Root prior floor: after the root's priors are computed (network / rollout prior, possibly
+    # over-peaked), p <- (1 - floor) * p + floor * uniform(legal) at the ROOT only, so that every
+    # legal move keeps a minimum exploration share.  0.0 = today's behaviour.
+    prior_floor: float = 0.0
+    # Tree reuse across the opponent's turn: when True ``_reusable_root`` also descends through
+    # decision nodes (the other player's moves the environment already applied) to find the new
+    # root; False (default) only walks through resolved chance nodes as before.
+    reuse_across_opponent: bool = False
 
 
 class Node:
@@ -71,7 +80,8 @@ class Node:
 
     __slots__ = (
         "state", "to_move", "is_chance", "is_terminal", "children", "priors",
-        "outcome_ids", "outcome_probs", "N", "W", "vN", "vW", "expanded", "terminal_value",
+        "outcome_ids", "outcome_probs", "outcome_cdf", "N", "W", "vN", "vW", "expanded", "terminal_value",
+        "floored",
     )
 
     def __init__(self, state: GameState):
@@ -83,6 +93,8 @@ class Node:
         self.priors: Dict[int, float] = {}
         self.outcome_ids: Optional[np.ndarray] = None
         self.outcome_probs: Optional[np.ndarray] = None
+        self.outcome_cdf: Optional[List[float]] = None  # cumulative probabilities (bisect sampling)
+        self.floored = False  # root prior floor already applied to ``priors``
         self.N: int = 0
         self.W: float = 0.0  # sum of absolute (player-0 frame) values
         self.vN: int = 0  # virtual-loss visits in flight
@@ -97,6 +109,11 @@ class Node:
             self.outcome_ids = np.fromiter((o for o, _ in outs), dtype=np.int64, count=len(outs))
             probs = np.fromiter((p for _, p in outs), dtype=np.float64, count=len(outs))
             self.outcome_probs = probs / probs.sum()
+            # Same cdf as ``rng.choice(p=outcome_probs)`` builds internally (cumsum, normalised by
+            # its last entry), cached once so that sampling is a single ``rng.random()`` + bisect.
+            cdf = self.outcome_probs.cumsum()
+            cdf /= cdf[-1]
+            self.outcome_cdf = cdf.tolist()
             self.expanded = True
 
     # absolute-frame mean value including virtual losses
@@ -119,6 +136,23 @@ class SearchResult:
 
     def best_action(self) -> int:
         return max(self.visit_counts.items(), key=lambda kv: kv[1])[0]
+
+    def best_action_q(self, min_frac: float = 0.25) -> int:
+        """Highest-Q action among the well-visited children.
+
+        Candidates are the actions with at least ``min_frac`` times the maximum visit count (and a
+        Q estimate, i.e. at least one visit); among them the largest mean value from the mover's
+        perspective wins (ties broken by visits).  Falls back to the visit-count argmax when no
+        candidate has a Q estimate.
+        """
+        q = self.extra.get("q") or {}
+        if not self.visit_counts:
+            raise ValueError("empty search result")
+        max_n = max(self.visit_counts.values())
+        cands = [a for a, n in self.visit_counts.items() if n > 0 and n >= min_frac * max_n and a in q]
+        if not cands:
+            return self.best_action()
+        return max(cands, key=lambda a: (q[a], self.visit_counts[a]))
 
     def sample_action(self, rng: np.random.Generator, temperature: float = 1.0) -> int:
         actions = list(self.visit_counts.keys())
@@ -159,6 +193,7 @@ class MCTS:
             raise ValueError("MCTS.run requires a non-terminal decision node at the root")
         if not root.expanded:
             self.expand_root(root)
+        self.apply_prior_floor(root)
         if add_noise:
             self._add_dirichlet_noise(root)
 
@@ -187,8 +222,23 @@ class MCTS:
         self._apply_virtual_loss(path)
         self._expand_batch([(root, path)])
 
+    def apply_prior_floor(self, root: Node) -> None:
+        """Mix ``cfg.prior_floor`` of a uniform distribution into the ROOT priors (once per node)."""
+        floor = self.cfg.prior_floor
+        if floor <= 0.0 or root.floored or not root.priors:
+            return
+        u = 1.0 / len(root.priors)
+        for a in root.priors:
+            root.priors[a] = (1.0 - floor) * root.priors[a] + floor * u
+        root.floored = True
+
     def advance(self, action_or_outcome: int) -> None:
-        """Move the retained root down one edge (for tree reuse between moves)."""
+        """Move the retained root down one edge (for tree reuse between moves).
+
+        Call it only with the edge actually taken from the retained root (the agent's own action
+        after its search); the opponent's moves and the environment's chance outcomes are matched
+        later by :meth:`_reusable_root` through the observable state key.
+        """
         if self._root is None or not self.cfg.reuse_tree:
             self._root = None
             return
@@ -204,15 +254,18 @@ class MCTS:
             return None
         node = self._root
         # Walk through chance nodes that the environment already resolved: we cannot
-        # know which outcome happened, so match by observable key.
+        # know which outcome happened, so match by observable key.  With
+        # ``reuse_across_opponent`` the walk also passes through decision nodes (the other
+        # player's moves, which the environment applied without telling the search).
+        through_decisions = self.cfg.reuse_across_opponent
         target = state.key()
         frontier = [node]
         for _ in range(self.cfg.max_chance_depth):
             nxt = []
             for n in frontier:
-                if n.state.key() == target and not n.is_chance:
+                if not n.is_chance and not n.is_terminal and n.state.key() == target:
                     return n
-                if n.is_chance:
+                if n.is_chance or (through_decisions and not n.is_terminal):
                     nxt.extend(n.children.values())
             if not nxt:
                 break
@@ -243,7 +296,12 @@ class MCTS:
                 depth_guard += 1
                 if depth_guard > self.cfg.max_chance_depth:
                     raise RuntimeError("chance chain too deep; engine bug?")
-                idx = int(self.rng.choice(len(node.outcome_ids), p=node.outcome_probs))
+                # identical to ``rng.choice(n, p=outcome_probs)``: one uniform draw, right-bisect on
+                # the normalised cdf (``searchsorted(side="right")``), without numpy's per-call
+                # validation / cumsum overhead
+                idx = bisect_right(node.outcome_cdf, self.rng.random())
+                if idx >= len(node.outcome_cdf):
+                    idx = len(node.outcome_cdf) - 1
                 outcome = int(node.outcome_ids[idx])
                 child = node.children.get(outcome)
                 if child is None:

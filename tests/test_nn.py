@@ -126,3 +126,59 @@ def test_selfplay_and_training_end_to_end():
         tr = Trainer(net, TrainConfig(batch_size=32, epochs=1.0, num_threads=1))
         stats = tr.train(buf, np.random.default_rng(0), log=lambda m: None)
         assert stats["steps"] >= 1 and np.isfinite(stats["total"])
+
+
+# ----------------------------------------------------------------------------- review round: evaluator options
+def test_jit_evaluator_matches_eager():
+    states = _random_states(1)[:10]
+    for trunk in ("resmlp", "attention"):
+        net = PolicyValueNet(NetConfig(input_dim=FEATURE_SIZE, num_actions=Actions.NUM, trunk=trunk, width=64, depth=2,
+                                       entity_slices=list(ENTITY_SLICES), attn_dim=32, attn_heads=2, attn_layers=1,
+                                       dropout=0.1))
+        eager = TorchEvaluator(net, encode, jit=False)
+        jit = TorchEvaluator(net, encode, jit=True)
+        assert not eager.jit_enabled
+        if trunk == "resmlp":
+            assert jit.jit_enabled  # the shipped architecture must actually be traced
+        p0, v0 = eager.evaluate(states)
+        p1, v1 = jit.evaluate(states)
+        assert np.abs(p0 - p1).max() < 1e-5 and np.abs(v0 - v1).max() < 1e-5
+
+
+def test_policy_temperature_flattens_priors():
+    net = new_network(PipelineConfig(net_width=64, net_depth=2))
+    states = _random_states(1)[:6]
+    p1, v1 = TorchEvaluator(net, encode, jit=False).evaluate(states)
+    p2, v2 = TorchEvaluator(net, encode, jit=False, policy_temperature=3.0).evaluate(states)
+    assert np.allclose(v1, v2)  # the value is untouched
+    for i, s in enumerate(states):
+        legal = np.asarray(list(s.legal_actions()))
+        assert abs(p2[i].sum() - 1.0) < 1e-4 and p2[i][~legal_mask(s)].max() < 1e-6
+        if len(legal) > 1 and p1[i][legal].max() > 1.0 / len(legal) + 1e-3:
+            assert p2[i][legal].max() < p1[i][legal].max()  # closer to uniform
+            assert np.argmax(p2[i]) == np.argmax(p1[i])  # same ordering
+    with np.testing.assert_raises(ValueError):
+        TorchEvaluator(net, encode, jit=False, policy_temperature=0.0)
+
+
+def test_factory_hybrid_options():
+    from sevenwa.agents.factory import make_agent
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "n.pt")
+        new_network(PipelineConfig(net_width=32, net_depth=1)).save(path)
+        a = make_agent(f"hybrid:{path}:8:0.5:pt=1.5:floor=0.05:pick=q:margin=0.5:batch=8:root=gumbel", seed=0)
+        ev = a.mcts.evaluator
+        assert ev.net.policy_temperature == 1.5 and ev.margin_weight == 0.5 and ev.lam == 0.5
+        assert a.mcts.cfg.prior_floor == 0.05 and a.mcts.cfg.batch_size == 8 and a.mcts.cfg.num_simulations == 8
+        assert a.final_pick == "q" and a.root_mode == "gumbel"
+        b = make_agent(f"hybrid:{path}:8:0.5", seed=0)
+        assert b.mcts.evaluator.net.policy_temperature == 1.0 and b.mcts.evaluator.margin_weight == 0.0
+        assert b.mcts.cfg.batch_size == 1 and b.mcts.cfg.prior_floor == 0.0 and b.final_pick == "visits"
+        assert b.name == f"hybrid8(lam=0.5,{path})"
+        c = make_agent(f"net:{path}:8:2.0:pt=2:cpuct=3:batch=2", seed=0)
+        assert c.mcts.evaluator.policy_temperature == 2.0 and c.mcts.cfg.c_puct == 3.0 and c.mcts.cfg.batch_size == 2
+        r = make_agent(f"netraw:{path}:pt=2", seed=0)
+        assert r.evaluator.policy_temperature == 2.0
+        env = Environment(seed=1)
+        obs = env.observe(0)
+        assert a.select_action(obs) in obs.legal_actions()
