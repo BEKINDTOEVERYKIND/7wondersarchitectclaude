@@ -335,7 +335,11 @@ is shipped as **`models/value_v8.pt`**: at 300 simulations it scores **25-15 (62
 margin) against the heuristic** (`imitation_v7`: 21-19), while its 40-game head-to-head against
 `imitation_v7` was 19-21 — the two are within the noise of 40-game matches, but the trend over
 the three value-head variants (52.5 % → 55 % → 62.5 % against the heuristic as the value MSE
-falls) is consistent.  The playout-blended hybrid remains the strongest configuration; the next
+falls) is consistent.  With the hybrid evaluator, however, `value_v8` scored only 11-9 (55 %)
+against the heuristic where `imitation_v7` scored 16-4 (80 %) — 20-game samples whose
+confidence intervals overlap almost entirely, so `hybrid:models/imitation_v7.pt:300:0.5` stays
+the recommended setting on the measured evidence.  The playout-blended hybrid remains the
+strongest configuration; the next
 lever is search-generated (off-policy) positions for the value head — `scripts/selfplay_chunks.py`
 with the hybrid evaluator produces them, at about 5 games per minute on this box.
 
