@@ -304,13 +304,40 @@ The diagnosis is the value head: its sign agrees with the final result on only 6
 early/mid-game positions of heuristic games (73 % late), so plain net-MCTS cannot exploit its
 own (good) priors, while the same priors with playout-grounded values win 80 %.  The corrected
 rules (stage graphs, more even card counts) make the game harder to value from ε-greedy
-outcomes than the old linear Wonders did.  Until a network with a better value head is shipped,
-**`hybrid:models/imitation_v7.pt:300:0.5` is the strongest play setting** (about 1 s per decision).
+outcomes than the old linear Wonders did.  **`hybrid:models/<checkpoint>:300:0.5` is the strongest play setting** (about 1 s per decision);
+see the value-head section below for the shipped checkpoints.
 
 Consequence for training: `SelfPlayConfig.evaluator = "hybrid"` (and `scripts/expert_iteration.py
 --evaluator hybrid --hybrid-lambda 0.5`) lets the expert-iteration teacher search with
 playout-blended values, so the search-play outcomes and root values that train the candidate's
 value head come from 80 %-strength play instead of 52 %-strength play.
+
+### Value-head experiments on the corrected rules (`runs/relabel*`)
+
+Because the hybrid evaluator (playout-grounded values) wins 80 % where the plain network wins
+52.5 %, the first attempt to close the gap was to retrain the value head on *playout-averaged*
+targets: `scripts/playout_relabel.py` samples every 3rd decision of ε-greedy heuristic games and
+labels it with the mean result / margin of 8 heuristic playouts from the player's belief state
+(119 000 positions from 6 000 games in 26 min on 4 workers).  Fine-tuning `imitation_v7` on them
+for 2 epochs (+15 % raw imitation samples) lowered the value MSE against playout-mean targets
+from 0.158 to 0.133 (score-margin MSE 0.053 → 0.046, policy unchanged), but the play did not
+follow: the candidate scored 21-19 against its teacher and 22-18 (55 %) against the heuristic at
+300 simulations — the same level as `imitation_v7`.  A K = 8 playout mean has a noise variance of
+roughly 0.1 on uncertain positions, so 0.133 is close to that floor: on the imitation
+distribution the network's value is already about as accurate as a playout mean.  The
+remaining difference to the hybrid is therefore off-distribution accuracy — the search visits
+lines the heuristic never plays, where a learned value extrapolates and a playout does not.  The
+follow-up round labelled every 2nd decision with 16 playouts (45 000 more positions before the
+machine was recycled).  Training `imitation_v7` for 4 epochs on all 164 000 playout-labelled
+positions (+10 % raw imitation) brought the value MSE on the playout targets from 0.147 to
+0.118 and the score-margin MSE from 0.050 to 0.041, policy unchanged (86 %).  This candidate
+is shipped as **`models/value_v8.pt`**: at 300 simulations it scores **25-15 (62.5 %, +3.5
+margin) against the heuristic** (`imitation_v7`: 21-19), while its 40-game head-to-head against
+`imitation_v7` was 19-21 — the two are within the noise of 40-game matches, but the trend over
+the three value-head variants (52.5 % → 55 % → 62.5 % against the heuristic as the value MSE
+falls) is consistent.  The playout-blended hybrid remains the strongest configuration; the next
+lever is search-generated (off-policy) positions for the value head — `scripts/selfplay_chunks.py`
+with the hybrid evaluator produces them, at about 5 games per minute on this box.
 
 ### Reproducing
 
