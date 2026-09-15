@@ -370,6 +370,42 @@ model's ordering at game start (green 8.5 > coin 8.3 > resource 7.5 > hornless s
 cat card 3.8 > 3-VP card 3.0 > horn cards 2.7), except that resources sit above blue cards —
 and every attempt to lower them below a 3-VP card lost.
 
+### Round 3 (2026-09-15): play-time settings and search-level knowledge tests
+
+Hybrid blend weight and search size against the tuned heuristic (20 games each, so ± 20 points):
+
+| agent | score |
+|---|---|
+| `hybrid:imitation_v7:300:0.5` | 80 % (16-4) — earlier measurement |
+| `hybrid:imitation_v7:300:0.75` | 65 % (13-7) |
+| `hybrid:imitation_v7:300:1.0` (pure playout values, net priors) | 70 % (14-6) |
+| `hybrid:imitation_v7:300:0.5:2` (two playouts per leaf) | 80 % (16-4, +6.5) |
+| **`hybrid:imitation_v7:600:0.5`** | **90 % (18-2, +6.8)** — about 2 s per decision |
+
+Doubling the search is the one change that clearly helps; the blend weight and a second
+playout per leaf do not.  `hybrid:models/imitation_v7.pt:600:0.5` is the recommended setting
+and the one the viewer's games were recorded with.
+
+`scripts/search_ab.py` tests a change of *knowledge* at search level: rollout-MCTS (heuristic
+prior + heuristic playouts, 200 simulations) built from a variant `HeuristicParams` against the
+same search built from the defaults, on paired deals.  The owner's two rules of thumb and the
+point-calibration idea were tested this way as well as in greedy self-play:
+
+| variant | greedy A/B (6 000 games) | search A/B (20–40 games) |
+|---|---|---|
+| `green_early_bonus=3` (greens worth +3 early) | 49.1 % | 45 % (18/40) |
+| `early_horn_discount=1.0` (horn cards worthless early) | 50.9 % | 45 % (9/20) |
+| `res_unit=0.5` (resources below a 3-VP card) | 45.2 % | 50 % (10/20) |
+| `deny_reveal` 0 / 0.1 / 0.2 / 0.5, `deny` 0.3 | 49–50 % | — |
+
+None helps.  The heuristic (and therefore the search built on it) draws blind from the central
+deck in 40 % of its main picks even when a side card is visible, passing up visible early greens
+40 % of the time; the reason is not the denial terms (neutral above) but the valuation: the
+expected value of a random central card (resources 7.5, coins 8.3 …) exceeds a single visible
+green unless a valuable token is face-up.  Whether that habit is right cannot be settled by
+self-play of the same policy — every evaluation here (playouts, imitation value) shares the
+heuristic's style — which is the strongest argument for the network-only route (§ next).
+
 ### Reproducing
 
 ```

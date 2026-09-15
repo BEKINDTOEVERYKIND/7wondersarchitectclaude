@@ -39,13 +39,13 @@ before that date (`imitation_v3`, `imitation_v5`, `expert_v6`; git history up to
 Under the corrected rules (scores against the tuned heuristic, see `docs/TRAINING.md`):
 `random` ≪ `heuristic` (A/B-tuned expert policy) < `net:models/imitation_v7.pt:300` (52.5 %)
 < `net:models/value_v8.pt:300` (62.5 %; same policy, value head trained on playout-averaged
-targets) < `rollout:200:1` (75 %) < **`hybrid:models/imitation_v7.pt:300:0.5`** (80 %, network
-priors with playout-blended values; the same hybrid with `value_v8` scored 55 % in its own
-20-game sample, so the two hybrids are indistinguishable at this sample size and the measured
-best is kept).  `net:...:600` roughly adds 15 points over `:300`.
+targets) < `rollout:200:1` (75 %) < `hybrid:models/imitation_v7.pt:300:0.5` (80 %, network
+priors with playout-blended values) < **`hybrid:models/imitation_v7.pt:600:0.5`** (90 %, 18-2).
+Deeper search is what helps; the blend weight, a second playout per leaf and the `value_v8`
+head do not move the hybrid.
 
 ```bash
-sevenwa play --ai hybrid:models/imitation_v7.pt:300:0.5  # strongest measured setting (~1 s per move)
+sevenwa play --ai hybrid:models/imitation_v7.pt:600:0.5  # strongest measured setting (~2 s per move)
 sevenwa play --ai net:models/value_v8.pt:600             # network-only search (~0.5 s per move)
 sevenwa play --ai heuristic                              # the tuned expert policy, instant
 ```
