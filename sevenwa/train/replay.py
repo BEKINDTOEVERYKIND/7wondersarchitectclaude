@@ -49,13 +49,23 @@ class ReplayBuffer:
         self.gen.append(np.full(n, generation, dtype=np.int32))
 
     def consolidate(self) -> None:
+        """Merge the per-game / per-shard arrays into one array per field.
+
+        Copies into a preallocated array and releases each part as soon as it is copied, so the
+        peak memory is about one copy of the data plus one part (np.concatenate would hold two
+        full copies: ~13 GB for 2.4 M samples of the 688 v2 features)."""
         if len(self.z) > 1:
-            self.feats = [np.concatenate(self.feats)]
-            self.mask = [np.concatenate(self.mask)]
-            self.pi = [np.concatenate(self.pi)]
-            self.z = [np.concatenate(self.z)]
-            self.margin = [np.concatenate(self.margin)]
-            self.gen = [np.concatenate(self.gen)]
+            for name in ("feats", "mask", "pi", "z", "margin", "gen"):
+                parts = getattr(self, name)
+                n = sum(len(x) for x in parts)
+                out = np.empty((n,) + parts[0].shape[1:], dtype=parts[0].dtype)
+                i = 0
+                for j in range(len(parts)):
+                    x = parts[j]
+                    out[i:i + len(x)] = x
+                    i += len(x)
+                    parts[j] = None  # release the part as soon as it is copied
+                setattr(self, name, [out])
 
     def keep_generations(self, min_generation: int) -> None:
         """Drop samples older than ``min_generation`` (sliding window)."""

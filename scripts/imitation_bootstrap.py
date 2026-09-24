@@ -40,16 +40,18 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--feature-version", type=int, default=FEATURE_VERSION_LATEST,
                     help="input feature encoding of the data and the network (1 = 581 features, 2 = + EXPERT block)")
+    ap.add_argument("--skip-generation", action="store_true", help="train on the shards already in run-dir/data and run-dir/holdout")
     args = ap.parse_args()
     n_feats = feature_size(args.feature_version)
     data_dir = os.path.join(args.run_dir, "data")
     hold_dir = os.path.join(args.run_dir, "holdout")
     os.makedirs(os.path.join(args.run_dir, "ckpt"), exist_ok=True)
     t0 = time.time()
-    run_imitation(args.games, data_dir, 0, args.workers, seed=args.seed, epsilon=args.epsilon,
-                  feature_version=args.feature_version)
-    run_imitation(args.holdout_games, hold_dir, 0, args.workers, seed=args.seed + 10_000_000, epsilon=args.epsilon,
-                  feature_version=args.feature_version)
+    if not args.skip_generation:
+        run_imitation(args.games, data_dir, 0, args.workers, seed=args.seed, epsilon=args.epsilon,
+                      feature_version=args.feature_version)
+        run_imitation(args.holdout_games, hold_dir, 0, args.workers, seed=args.seed + 10_000_000, epsilon=args.epsilon,
+                      feature_version=args.feature_version)
     buf = ReplayBuffer(n_feats, Actions.NUM)
     n = buf.load_shards(os.path.join(data_dir, "gen0000_*.npz"))
     check_feature_width(buf, n_feats, data_dir)
