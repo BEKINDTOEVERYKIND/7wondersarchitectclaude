@@ -501,10 +501,13 @@ training stack (five readers, two skeptical verifiers per finding) led to these 
 | `pt=1.5:floor=0.05` (flatter priors, root exploration floor) | 16-14 (53 %) |
 | `pick=q` (final move by Q among well-visited children) | 15-16 (48 %) |
 | **`margin=0.5`** (playouts report `0.5·result + 0.5·tanh(margin/8)`) | **41-23 (64 %, 95 % CI ≈ 52–75 %)** over four independent batches |
+| `margin=0.5` at **600** simulations (vs `hybrid:…:600:0.5`) | 24-20 (54.5 %, CI 40–68 %, mean margin +1.9) |
 
   The margin blend is the first search change since doubling the simulations that clearly
   wins: a playout's ±1 result is noisy, and a 15-point loss is worse information than a
-  1-point loss.  **Recommended play setting: `hybrid:models/imitation_v7.pt:600:0.5:margin=0.5`.**
+  1-point loss.  Its benefit shrinks with deeper search (more simulations already average the
+  playout noise out): clear at 300, small and not statistically settled at 600, never measured
+  worse.  **Recommended play setting: `hybrid:models/imitation_v7.pt:600:0.5:margin=0.5`.**
   Speed: TorchScript inference (−30 % per forward) and bisect chance sampling (−24 % per
   playout) make every hybrid decision cheaper at identical outputs.
 * **Expert features (feature version 2)**: the network input gains an EXPERT block of 107
@@ -534,6 +537,14 @@ training stack (five readers, two skeptical verifiers per finding) led to these 
   The value head is limited by its *targets* (single noisy game outcomes), not by missing
   inputs; and inside the hybrid neither a better value head nor a different blend weight moves
   the result — the hybrid's strength comes from the heuristic playouts and the search depth.
+* **Search depth saturates at ~600 simulations**: `hybrid:imitation_v7:1200:0.5:margin=0.5` vs
+  the same at 600, paired: 7-9 (44 %), at twice the thinking time (~4 s per decision).  More
+  compute per move is not the next lever; root-parallel search was therefore not built.
+* **Ladder check** of the recommended setting `hybrid:models/imitation_v7.pt:600:0.5:margin=0.5`
+  against the (re-tuned, `pb_max=0.5`) heuristic: 14-6 (70 %, mean margin +6.0) over 20 games.
+  The earlier 18-2 for the setting without margin blending used the old heuristic; 20-game
+  samples against the heuristic are only good to about ±20 points, so paired head-to-head
+  matches are the evidence used for decisions.
 
 ### Reproducing
 

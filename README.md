@@ -38,17 +38,20 @@ before that date (`imitation_v3`, `imitation_v5`, `expert_v6`; git history up to
 `bb15851`) used assumed data and an incompatible feature/action layout and was removed.
 Under the corrected rules (scores against the tuned heuristic, see `docs/TRAINING.md`):
 `random` ≪ `heuristic` (A/B-tuned expert policy) < `net:models/imitation_v7.pt:300` (52.5 %)
-< `net:models/value_v8.pt:300` (62.5 %; same policy, value head trained on playout-averaged
-targets) < `rollout:200:1` (75 %) < `hybrid:models/imitation_v7.pt:300:0.5` (80 %, network
-priors with playout-blended values) < **`hybrid:models/imitation_v7.pt:600:0.5`** (90 %, 18-2).
-Deeper search is what helps; the blend weight, a second playout per leaf and the `value_v8`
-head do not move the hybrid.
+< `net:models/value_v8.pt:300` (62.5 %) < `rollout:200:1` (75 %) < `hybrid:models/imitation_v7.pt:300:0.5`
+(80 %) < **`hybrid:models/imitation_v7.pt:600:0.5:margin=0.5`** (70–90 % in 20-game samples).
+Head-to-head, margin-blended playouts beat plain ones 41-23 at 300 simulations and 24-20 at
+600; 1 200 simulations do not beat 600 (7-9).  Networks trained on richer inputs (`runs/v9`) or
+on playout-averaged value targets (`value_v8`) do not improve the hybrid.
 
 ```bash
-sevenwa play --ai hybrid:models/imitation_v7.pt:600:0.5  # strongest measured setting (~2 s per move)
-sevenwa play --ai net:models/value_v8.pt:600             # network-only search (~0.5 s per move)
-sevenwa play --ai heuristic                              # the tuned expert policy, instant
+sevenwa play --ai hybrid:models/imitation_v7.pt:600:0.5:margin=0.5   # strongest measured setting (~2 s per move)
+sevenwa play --ai net:models/value_v8.pt:600                         # network-only search (~0.5 s per move)
+sevenwa play --ai heuristic                                          # the tuned expert policy, instant
 ```
+
+`docs/viewer/index.html` replays three self-play games of the strongest setting turn by turn
+(rebuild with `python scripts/game_json.py …` and `python docs/viewer/build.py`).
 
 ## Layout
 
