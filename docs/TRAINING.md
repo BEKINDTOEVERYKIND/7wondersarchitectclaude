@@ -471,6 +471,48 @@ plays, where a learned value extrapolates and a playout does not):
   replies).  Smoke test (`--games 2 --sims 32 --leaves-per-decision 4 --playouts 2`): 71
   searches, 123 labelled positions in 3 s.
 
+### Round 4 (2026-09-24): audit fixes, search options, expert features
+
+An adversarial audit of the engine, the recorded games, the search, the heuristic and the
+training stack (five readers, two skeptical verifiers per finding) led to these changes:
+
+* **Replay recorder**: the Cat peek is resolved by the environment right after the previous
+  player's step, so the recorder attributed it to the previous turn.  The engine was right all
+  along (5 609 peeks in 400 replayed games, every one at the start of the holder's own turn and
+  none while the holder already knew the card); the recorder now detects *fresh* peeks across the
+  step, and the viewer shows either the peek or "the top is unchanged since the peek on turn N".
+* **Engine**: a blind central draw now clears the opponent's public "has peeked" bit in belief
+  states; the `cat_peek_main_draw_only=False` house rule no longer double-counts the top card; and
+  a Halicarnassus look at a deck whose new top had been revealed inside the engine (single
+  possible card) read the physical window one card too high (≈ 1 game in 40 000, found by the
+  v9 imitation run) — the state now records the deck size when each look began.
+* **Heuristic**: an Engineering/Economy token that forces the mover's own *losing* 5th stage is
+  penalised; Babylon's 5th-stage token VP counts in the win check; Decor is certain at the
+  finish line; the non-holder no longer reacts to a sampled central card; `pb_max` 0.9 → 0.5
+  (51.2 % [50.3–52.1] over 12 000 paired games).  Tested and left off (greedy paired A/B, 4 000–
+  12 000 games each): stall-aware horizon 48.8 %, battle response 0.75 / 0.5 49.5 / 48.6 %,
+  blind-token discount 49.2 %, denial variants 48.8–51.0 %, horizon / penalty / token-frequency
+  variants 48.8–51.3 %.  The greedy heuristic is at a local optimum.
+* **Search options** (new `key=value` spec tokens, see "Agents"), paired against
+  `hybrid:models/imitation_v7.pt:300:0.5` with `scripts/spec_ab.py` (each deal from both seats):
+
+| option | result |
+|---|---|
+| `pt=1.5:floor=0.05` (flatter priors, root exploration floor) | 16-14 (53 %) |
+| `pick=q` (final move by Q among well-visited children) | 15-16 (48 %) |
+| **`margin=0.5`** (playouts report `0.5·result + 0.5·tanh(margin/8)`) | **41-23 (64 %, 95 % CI ≈ 52–75 %)** over four independent batches |
+
+  The margin blend is the first search change since doubling the simulations that clearly
+  wins: a playout's ±1 result is noisy, and a 15-point loss is worse information than a
+  1-point loss.  **Recommended play setting: `hybrid:models/imitation_v7.pt:600:0.5:margin=0.5`.**
+  Speed: TorchScript inference (−30 % per forward) and bisect chance sampling (−24 % per
+  playout) make every hybrid decision cheaper at identical outputs.
+* **Expert features (feature version 2)**: the network input gains an EXPERT block of 107
+  heuristic quantities per position (graded cards-missing per stage, cards needed, the
+  heuristic's card / token / build / shield values for both players, horizon, battle
+  probability and the heuristic prior), pinned to today's heuristic parameters.  Version-1
+  networks load and play bit-identically (`encoder_for_dim`).
+
 ### Reproducing
 
 ```
