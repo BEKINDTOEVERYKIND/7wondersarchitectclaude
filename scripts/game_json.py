@@ -165,12 +165,19 @@ def main():
     last_turn = -1
     cur = None
     peek = None  # card freshly peeked at by the Cat holder at the start of the turn about to be recorded
+    peek_turn = {0: None, 1: None}  # turn of each player's latest fresh peek
     while not env.is_terminal():
         p = env.to_move()
         obs = env.observe(p)
         if obs.turn != last_turn:
             last_turn = obs.turn
-            cur = {"turn": obs.turn + 1, "mover": p, "peek": peek,
+            # the Cat holder who did not peek still knows the top card from an earlier peek (it was not drawn since)
+            still = None
+            if peek is None and obs.cat == p and obs.knows_central(p):
+                still = {"card": KINDS[obs.deck_top[CENTRAL]].name, "since_turn": peek_turn[p]}
+            if peek is not None:
+                peek_turn[p] = obs.turn + 1
+            cur = {"turn": obs.turn + 1, "mover": p, "peek": peek, "cat_known": still,
                    "start": {"players": [player_snapshot(obs, 0), player_snapshot(obs, 1)], "table": table_snapshot(obs)},
                    "decisions": [], "events": []}
             peek = None

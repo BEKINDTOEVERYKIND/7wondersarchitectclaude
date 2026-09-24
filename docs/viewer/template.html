@@ -273,7 +273,9 @@
       return `<div class="deck"><div class="who">${esc(who)}</div><div class="n">${d.size} <span class="who">cards</span></div><div>${top}</div></div>`;
     }).join('');
     const conflict = `<span class="conflict" aria-label="${tb.conflict} of ${tb.conflict_max} conflict tokens">${Array.from({ length: tb.conflict_max }, (_, i) => `<i class="${i < tb.conflict ? 'on' : ''}"></i>`).join('')}</span>`;
-    const peek = t.peek ? `<div class="dec" style="--pc: var(--p${t.mover})"><div class="q"><div class="what"><span class="badge p${t.mover}">P${t.mover}</span> Start of turn: holds the Cat and peeks at the central deck</div></div><div class="gain">top card is ${chipsHtml({ [t.peek]: 1 })}</div></div>` : '';
+    let peek = '';
+    if (t.peek) peek = `<div class="dec" style="--pc: var(--p${t.mover})"><div class="q"><div class="what"><span class="badge p${t.mover}">P${t.mover}</span> Start of turn: holds the Cat and peeks at the central deck</div></div><div class="gain">top card is ${chipsHtml({ [t.peek]: 1 })}</div></div>`;
+    else if (t.cat_known) peek = `<div class="dec" style="--pc: var(--p${t.mover})"><div class="q"><div class="what"><span class="badge p${t.mover}">P${t.mover}</span> Start of turn: holds the Cat; the central top is unchanged since the peek${t.cat_known.since_turn ? ` on turn ${t.cat_known.since_turn}` : ''}, so there is nothing new to see</div></div><div class="gain">still known: ${chipsHtml({ [t.cat_known.card]: 1 })}</div></div>`;
     const decs = peek + t.decisions.map(d => {
       const maxV = Math.max(0, ...d.options.map(o => o.visits || 0));
       const opts = d.options.slice().sort((a, b) => (b.visits || 0) - (a.visits || 0)).map(o => optHtml(o, o.action === d.chosen, maxV)).join('');
