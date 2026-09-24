@@ -86,14 +86,22 @@ class Environment:
 
     def _apply_hali_event(self) -> None:
         """After a Halicarnassus choice (explicit or auto-resolved): remove the kept card from the
-        physical top-``n`` window and shuffle the whole deck, as the rulebook prescribes."""
-        ev = self.state.hali_event
-        if ev is None:
+        physical top-``n`` window and shuffle the whole deck, as the rulebook prescribes.
+
+        Cards taken from the top of that deck earlier in the same transition may not have been synced
+        yet (a reveal with a single possible card is resolved inside the engine, without the
+        environment), so the window is located from the deck size recorded when the look began."""
+        events = self.state.hali_event
+        if not events:
             return
-        d, n, kept = ev
-        window = self.decks[d][:n]
-        window.remove(kept)
-        self.decks[d] = self._shuffled(window + self.decks[d][n:])
+        for d, n, kept, size_at_look in events:
+            taken = len(self.decks[d]) - size_at_look
+            if taken < 0:  # pragma: no cover - the physical deck can only be longer than the belief's
+                raise RuntimeError(f"Halicarnassus window: physical deck {d} shorter than at the look")
+            del self.decks[d][:taken]
+            window = self.decks[d][:n]
+            window.remove(kept)
+            self.decks[d] = self._shuffled(window + self.decks[d][n:])
         self.state.hali_event = None
 
     # ---- Environment protocol ------------------------------------------------

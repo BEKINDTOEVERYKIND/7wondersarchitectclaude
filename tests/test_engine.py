@@ -1082,12 +1082,12 @@ class TestStageEffects:
         s = s.apply_action(A.PICK_LEFT).apply_chance(K.papyrus)  # the last reveal (glass) is forced
         assert s.dkind == D_HALI_CHOOSE and s.hali_event is None
         s = s.apply_action(A.HALI_BASE + K.glass)
-        assert s.hali_event == (0, 3, K.glass)
+        assert s.hali_event == ((0, 3, K.glass, s.deck_size[0] + 1),)
         assert s.is_chance() and s.ckind == C_REVEAL
         assert s.apply_chance(K.clay).hali_event is None  # cleared by the next transition
         # five identical cards: reveals and choice are auto-resolved inside one transition
         auto = self.hali(K.wood, [K.wood] * 4).apply_action(A.PICK_LEFT)
-        assert auto.hali_event == (0, 5, K.wood) and is_main_pick_of(auto, 1)
+        assert auto.hali_event == ((0, 5, K.wood, auto.deck_size[0] + 1),) and is_main_pick_of(auto, 1)
 
 
 # =====================================================================================

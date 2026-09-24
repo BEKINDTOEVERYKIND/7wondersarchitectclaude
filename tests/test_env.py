@@ -19,7 +19,7 @@ from sevenwa.engine.cards import NUM_KINDS
 from sevenwa.engine.env import Environment, make_env
 from sevenwa.engine.state import C_DRAW_CENTRAL, CENTRAL, D_HALI_CHOOSE, D_HALI_DECK
 
-from conftest import (K, W, assert_invariants, check, edit, first_n, give_many, initial_composition, is_main_pick_of,
+from conftest import (K, W, assert_invariants, check, drain_deck, edit, first_n, give_many, initial_composition, is_main_pick_of,
                       physical_matches_belief, random_env_game, set_deck, sync_env_to_state)
 
 
@@ -251,6 +251,28 @@ class TestPhysicalModel:
         expected = sorted(window[:2] + window[3:] + rest)
         assert sorted(env.decks[0]) == expected and len(env.decks[0]) == s.deck_size[0] == 7
         assert env.decks[0][0] == s.deck_top[0]
+        physical_matches_belief(env)
+
+    def test_halicarnassus_on_a_deck_whose_new_top_was_revealed_inside_the_engine(self):
+        """Regression (found in the 40 000-game imitation run, seed 38303): Halicarnassus takes the
+        next-to-last card of its own deck, the only remaining card is revealed without the environment
+        (single outcome), the build triggers the look and the opponent's deck is empty, so the deck
+        choice and the keep are auto-resolved too -- all in one transition.  The physical deck still
+        holds the taken card; the window must be located after it."""
+        env = make_env(3, wonders=(W.Halicarnassus, W.Giza))
+        c = edit(env.state)
+        c.built[0] = first_n(1)
+        give_many(c, 0, [K.stone])
+        drain_deck(c, 1)
+        set_deck(c, 0, K.stone, [K.civ3])
+        c.central_known_to = 0
+        sync_env_to_state(env, c, 3)
+        env.decks[0] = [K.stone, K.civ3]
+        physical_matches_belief(env)
+        env.step(A.PICK_LEFT)  # stone -> S2 (2 identical) -> look at the only non-empty deck: civ3, kept
+        s = env.state
+        assert s.num_stages(0) == 2 and s.cards[0][K.civ3] == 1 and s.deck_size[0] == 0
+        assert env.decks[0] == [] and s.hali_event is None
         physical_matches_belief(env)
 
     def test_auto_resolved_halicarnassus_choice_still_reshuffles(self):

@@ -117,7 +117,9 @@ class GameState:
         s.deck_size = [sum(s.unseen[0]), sum(s.unseen[1]), sum(s.unseen[2])]
         s.central_known_to = 0  # bitmask of players who know the central top card
         s.observer = -1  # player whose belief this state represents (-1: public/omniscient environment view)
-        s.hali_event = None  # (deck, window size, kept kind) when the last transition resolved a Halicarnassus choice
+        # Halicarnassus choices resolved by the last transition: a tuple of (deck, window size, kept kind,
+        # deck size when the look began) -- several when a kept card completes another look stage at once
+        s.hali_event = None
         s.discard = [0] * NUM_KINDS
         s.faceup = []
         s.prog_unseen = [t.copies for t in TOKENS]
@@ -807,8 +809,9 @@ class GameState:
             rest.remove(k)
             for x in rest:
                 self.unseen[d][x] += 1
+            size_at_look = self.deck_size[d]  # the window is still counted in the deck until now
             self.deck_size[d] -= 1
-            self.hali_event = (d, len(revealed), k)
+            self.hali_event = (self.hali_event or ()) + ((d, len(revealed), k, size_at_look),)
             self._push(("reveal", d), ("placed", k, d, "hali"))
         else:  # pragma: no cover
             raise RuntimeError("bad decision kind")
