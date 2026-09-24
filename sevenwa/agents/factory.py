@@ -11,6 +11,9 @@ Specs
 * ``hybrid:<checkpoint.pt>[:<sims>[:<lam>[:<playouts>]]]`` – neural MCTS whose leaf values are blended
   with heuristic playouts: value = (1-lam)·net + lam·playout (default sims 100, lam 0.5, 1 playout)
 
+Every checkpoint is served the feature encoding it was trained on, chosen by its ``cfg.input_dim``
+(``sevenwa.nn.features.encoder_for_dim``: 581 inputs = version 1, e.g. ``models/imitation_v7.pt``).
+
 Options
 -------
 Any token after the kind (and, for ``net`` / ``netraw`` / ``hybrid``, after the checkpoint path) that
@@ -148,6 +151,16 @@ def _unit(opts: Dict[str, str], key: str, default: float, spec: str) -> float:
     return v
 
 
+def _load_net(path: str):
+    """Load a checkpoint and the feature encoder it was trained on (chosen by ``cfg.input_dim``:
+    581 inputs = feature version 1, e.g. ``imitation_v7`` / ``value_v8``; the latest size = version 2)."""
+    from ..nn.features import encoder_for_dim
+    from ..nn.model import PolicyValueNet
+    net = PolicyValueNet.load(path)
+    _, encode, _ = encoder_for_dim(net.cfg.input_dim)
+    return net, encode
+
+
 def _tag(opts: Dict[str, str]) -> str:
     return "[" + ",".join(f"{k}={v}" for k, v in opts.items()) + "]" if opts else ""
 
@@ -184,11 +197,9 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
                          num_actions=Actions.NUM, **kw)
     if kind == "hybrid":
         from ..nn.evaluator import TorchEvaluator
-        from ..nn.features import encode
-        from ..nn.model import PolicyValueNet
         from ..search.rollout import HybridEvaluator
         path = parts[1]
-        net = PolicyValueNet.load(path)
+        net, encode = _load_net(path)
         lam = float(parts[3]) if len(parts) > 3 else 0.5
         playouts = int(parts[4]) if len(parts) > 4 else 1
         pt = float(opts.get("pt", 1.0))
@@ -204,10 +215,8 @@ def make_agent(spec: str, seed: Optional[int] = None, mcts_config: Optional[MCTS
                          num_actions=Actions.NUM, **kw)
     if kind in ("net", "netraw"):
         from ..nn.evaluator import TorchEvaluator
-        from ..nn.features import encode
-        from ..nn.model import PolicyValueNet
         path = parts[1]
-        net = PolicyValueNet.load(path)
+        net, encode = _load_net(path)
         value_t = float(parts[4]) if len(parts) > 4 else 1.0
         pt = float(opts.get("pt", 1.0))
         ev = TorchEvaluator(net, encode, num_threads=net_threads, value_temperature=value_t, policy_temperature=pt)

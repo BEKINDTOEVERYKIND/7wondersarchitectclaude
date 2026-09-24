@@ -18,6 +18,12 @@ pi, z, margin, gen``), one shard per job.  A job whose shard already exists is s
 killed run can be resumed with the same command; the shards train through
 ``scripts/expert_iteration.py --skip-generation --extra-search-glob '<out-dir>/*.npz'``.
 
+Feature versions: the search's evaluator always uses the checkpoint's own encoder (chosen by its
+``cfg.input_dim``); the samples are written in ``--feature-version``, by default the checkpoint's own
+version too (581 features for ``models/imitation_v7.pt``), so the shards train that network as
+``expert_iteration.py --teacher <same checkpoint>``; pass another version only when the shards are
+meant for a network with another encoder.
+
 Usage:
   python scripts/leaf_relabel.py --net models/imitation_v7.pt --out-dir runs/leaf1/data \
       --games 400 --sims 96 --workers 4 --playouts 8 --leaves-per-decision 8 --every 2 --jobs 16
@@ -33,7 +39,7 @@ import numpy as np
 from sevenwa.agents.heuristic import HeuristicAgent, heuristic_action, heuristic_prior
 from sevenwa.engine.actions import Actions
 from sevenwa.engine.env import Environment
-from sevenwa.nn.features import FEATURE_SIZE, encode_state, legal_mask
+from sevenwa.nn.features import encoders, feature_size, legal_mask
 from sevenwa.search.mcts import Node
 from sevenwa.search.rollout import playout
 
@@ -89,7 +95,7 @@ def worker(job: Dict) -> Dict:
     import torch
     from sevenwa.agents.mcts_agent import MCTSAgent
     from sevenwa.nn.evaluator import TorchEvaluator
-    from sevenwa.nn.features import encode
+    from sevenwa.nn.features import encoder_for_dim
     from sevenwa.nn.model import PolicyValueNet
     from sevenwa.search.mcts import MCTSConfig
 
@@ -97,7 +103,10 @@ def worker(job: Dict) -> Dict:
     t0 = time.time()
     rng = np.random.default_rng(job["rng_seed"])
     net = PolicyValueNet.load(job["net"])
-    ev = TorchEvaluator(net, encode, num_threads=1)
+    net_version, net_encode, _ = encoder_for_dim(net.cfg.input_dim)  # the search: the checkpoint's own encoder
+    version = int(job.get("feature_version") or net_version)  # default: the shards train this checkpoint
+    _, encode_state = encoders(version)  # the written samples
+    ev = TorchEvaluator(net, net_encode, num_threads=1)
     cfg = MCTSConfig(num_simulations=job["sims"], batch_size=8)
     net_agents = [MCTSAgent(ev, cfg, name="net", rng=np.random.default_rng(rng.integers(2 ** 31)),
                             num_actions=Actions.NUM, root_mode=job["root_mode"], temperature=1.0,
@@ -149,7 +158,7 @@ def worker(job: Dict) -> Dict:
     out_path = job["out_path"]
     n = len(zs)
     arrs = {
-        "feats": np.stack(feats).astype(np.float32) if n else np.zeros((0, FEATURE_SIZE), np.float32),
+        "feats": np.stack(feats).astype(np.float32) if n else np.zeros((0, feature_size(version)), np.float32),
         "mask": np.stack(masks) if n else np.zeros((0, Actions.NUM), bool),
         "pi": np.stack(pis).astype(np.float32) if n else np.zeros((0, Actions.NUM), np.float32),
         "z": np.array(zs, np.float32), "margin": np.array(margins, np.float32),
@@ -160,6 +169,7 @@ def worker(job: Dict) -> Dict:
     np.savez_compressed(tmp, **arrs)
     os.replace(tmp, out_path)
     return {"games": n_games, "samples": n, "searches": n_searches, "seconds": time.time() - t0, "out_path": out_path,
+            "feature_version": version,
             "mean_depth": float(np.mean(depths)) if depths else 0.0,
             "mean_visits": float(np.mean(visits)) if visits else 0.0,
             "net_score": net_wins / heur_games if heur_games else float("nan"), "heur_games": heur_games}
@@ -193,7 +203,12 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=16, help="number of shards (jobs); >= workers so progress is saved often")
     ap.add_argument("--generation", type=int, default=1, help="``gen`` value written into the shards")
+    ap.add_argument("--feature-version", type=int, default=None,
+                    help="feature encoding of the WRITTEN samples (default: the checkpoint's own version; the search "
+                         "always uses the checkpoint's own encoder)")
     args = ap.parse_args()
+    if args.feature_version is not None:
+        feature_size(args.feature_version)  # validates
     os.makedirs(args.out_dir, exist_ok=True)
     games = make_games(args.games, args.seed)
     jobs = []
@@ -209,7 +224,8 @@ def main():
         jobs.append({"net": args.net, "games": chunk, "sims": args.sims, "playouts": args.playouts,
                      "leaves": args.leaves_per_decision, "every": args.every, "min_visits": args.min_visits,
                      "opp_epsilon": args.opp_epsilon, "root_mode": args.root_mode, "temp_moves": args.temp_moves,
-                     "rng_seed": args.seed * 1000 + j, "out_path": out_path, "generation": args.generation})
+                     "rng_seed": args.seed * 1000 + j, "out_path": out_path, "generation": args.generation,
+                     "feature_version": args.feature_version})
     if skipped:
         print(f"skipping {skipped} finished jobs", flush=True)
     t0 = time.time()

@@ -8,6 +8,9 @@ heuristic playouts started from the player's belief state (hidden cards re-sampl
 i.e. the same estimate the hybrid evaluator blends into its leaf values.  Policy targets stay the
 heuristic's soft prior.  Shards use the self-play format, so they train through
 ``scripts/expert_iteration.py --skip-generation --extra-search-glob '<out-dir>/*.npz'``.
+``--feature-version`` (default: the latest) selects the feature encoding of the samples; it must match
+the network they will train (``--feature-version 1`` for 581-feature networks such as
+``models/imitation_v7.pt``).
 """
 import argparse
 import multiprocessing as mp
@@ -18,8 +21,9 @@ import numpy as np
 
 from sevenwa.game import CHANCE
 from sevenwa.agents.heuristic import HeuristicParams, heuristic_action, heuristic_prior
+from sevenwa.engine.actions import Actions
 from sevenwa.engine.env import Environment
-from sevenwa.nn.features import encode_state, legal_mask
+from sevenwa.nn.features import FEATURE_VERSION_LATEST, encoders, feature_size, legal_mask
 
 
 def _playout(state, rng):
@@ -37,7 +41,9 @@ def _playout(state, rng):
 
 def worker(args):
     from dataclasses import replace
-    seeds, eps, K, every, rng_seed, out_path = args
+    seeds, eps, K, every, rng_seed, out_path = args[:6]
+    version = args[6] if len(args) > 6 else FEATURE_VERSION_LATEST
+    _, encode_state = encoders(version)
     rng = np.random.default_rng(rng_seed)
     params = replace(HeuristicParams(), epsilon=eps)
     feats, masks, pis, zs, margins = [], [], [], [], []
@@ -66,14 +72,16 @@ def worker(args):
                     margins.append(acc_m / K)
             env.step(heuristic_action(obs, rng, params))
         n_games += 1
-    feats = np.stack(feats).astype(np.float32)
-    masks = np.stack(masks)
-    pis = np.stack(pis).astype(np.float32)
+    n = len(zs)
+    feats = np.stack(feats).astype(np.float32) if n else np.zeros((0, feature_size(version)), np.float32)
+    masks = np.stack(masks) if n else np.zeros((0, Actions.NUM), bool)
+    pis = np.stack(pis).astype(np.float32) if n else np.zeros((0, Actions.NUM), np.float32)
     z = np.array(zs, np.float32)
     margin = np.array(margins, np.float32)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     np.savez_compressed(out_path, feats=feats, mask=masks, pi=pis, z=z, margin=margin, gen=np.full(len(z), 1, np.int32))
-    return {"games": n_games, "samples": int(len(z)), "seconds": time.time() - t0, "out_path": out_path}
+    return {"games": n_games, "samples": int(len(z)), "seconds": time.time() - t0, "out_path": out_path,
+            "feature_version": version}
 
 
 def main():
@@ -86,14 +94,17 @@ def main():
     ap.add_argument("--epsilon", type=float, default=0.1)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--jobs", type=int, default=16, help="number of shards (jobs); >= workers so progress is saved often")
+    ap.add_argument("--feature-version", type=int, default=FEATURE_VERSION_LATEST,
+                    help="feature encoding of the written samples (1 = 581 features, 2 = + EXPERT block)")
     args = ap.parse_args()
+    feature_size(args.feature_version)  # validates
     seeds = list(range(args.seed * 1_000_000, args.seed * 1_000_000 + args.games))
     jobs = []
     for j in range(args.jobs):
         chunk = seeds[j::args.jobs]
         if chunk:
             jobs.append((chunk, args.epsilon, args.playouts, args.every, args.seed * 1000 + j,
-                         os.path.join(args.out_dir, f"gen0001_j{j:02d}.npz")))
+                         os.path.join(args.out_dir, f"gen0001_j{j:02d}.npz"), args.feature_version))
     t0 = time.time()
     total = 0
     with mp.get_context("fork").Pool(args.workers) as pool:

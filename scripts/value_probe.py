@@ -16,6 +16,8 @@ its leaves — and each network's value head (and score head) is compared agains
   compare the score head against the playout margin.
 
 The playouts dominate the cost (~5 ms each): 1 000 positions × 8 playouts ≈ 40 s per epsilon.
+Each network is queried with its own feature encoding (chosen by its ``cfg.input_dim``), so
+581-feature (version 1) and later networks can be compared on the same positions.
 
 Usage:
   python scripts/value_probe.py --nets models/imitation_v7.pt,models/value_v8.pt \
@@ -25,14 +27,14 @@ import argparse
 import multiprocessing as mp
 import time
 from dataclasses import replace
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
 from sevenwa.agents.heuristic import HeuristicParams, heuristic_action
 from sevenwa.engine.env import Environment
 from sevenwa.engine.state import DECISION_NAMES
-from sevenwa.nn.features import encode_state
+from sevenwa.nn.features import FEATURE_VERSION_LATEST, encoders, feature_size, version_for_dim
 from sevenwa.search.rollout import playout
 
 try:  # private helper of the heuristic: skipped (bucket omitted) if it disappears
@@ -63,15 +65,24 @@ def cards_needed(state) -> Optional[int]:
         return None
 
 
-def sample_positions(n_positions: int, eps: float, playouts: int, every: int, seed: int) -> Dict[str, np.ndarray]:
+def feats_key(version: int) -> str:
+    return f"feats_v{int(version)}"
+
+
+def sample_positions(n_positions: int, eps: float, playouts: int, every: int, seed: int,
+                     versions: Sequence[int] = (FEATURE_VERSION_LATEST,)) -> Dict[str, np.ndarray]:
     """Sample ``n_positions`` labelled decision positions from ε-greedy heuristic games.
 
-    Returns arrays: ``feats`` (N, F), ``z`` and ``margin`` (playout means from the mover's
-    perspective), ``turn``, ``need`` (-1 when unavailable), ``dkind``.
+    Returns arrays: ``feats_v<k>`` (N, F_k) for every requested feature version ``k``, ``z`` and
+    ``margin`` (playout means from the mover's perspective), ``turn``, ``need`` (-1 when
+    unavailable), ``dkind``.
     """
     rng = np.random.default_rng(seed)
     params = replace(HeuristicParams(), epsilon=eps)
-    feats, zs, ms, turns, needs, kinds = [], [], [], [], [], []
+    versions = sorted({int(v) for v in versions})
+    enc = {v: encoders(v)[1] for v in versions}
+    feats = {v: [] for v in versions}
+    zs, ms, turns, needs, kinds = [], [], [], [], []
     game = 0
     while len(zs) < n_positions:
         env = Environment(seed=seed * 1_000_003 + game)
@@ -89,7 +100,8 @@ def sample_positions(n_positions: int, eps: float, playouts: int, every: int, se
                         r, m = playout(obs, rng, heuristic_action, return_margin=True)
                         acc_z += r[p]
                         acc_m += m if p == 0 else -m
-                    feats.append(encode_state(obs))
+                    for v in versions:
+                        feats[v].append(enc[v](obs))
                     zs.append(acc_z / playouts)
                     ms.append(acc_m / playouts)
                     turns.append(int(obs.turn))
@@ -97,14 +109,16 @@ def sample_positions(n_positions: int, eps: float, playouts: int, every: int, se
                     needs.append(-1 if need is None else need)
                     kinds.append(int(obs.dkind))
             env.step(heuristic_action(obs, rng, params))
-    return {"feats": np.stack(feats).astype(np.float32), "z": np.array(zs, np.float32),
-            "margin": np.array(ms, np.float32), "turn": np.array(turns, np.int32),
-            "need": np.array(needs, np.int32), "dkind": np.array(kinds, np.int32), "games": game}
+    out = {feats_key(v): (np.stack(feats[v]).astype(np.float32) if feats[v] else np.zeros((0, feature_size(v)), np.float32))
+           for v in versions}
+    out.update({"z": np.array(zs, np.float32), "margin": np.array(ms, np.float32), "turn": np.array(turns, np.int32),
+                "need": np.array(needs, np.int32), "dkind": np.array(kinds, np.int32), "games": game})
+    return out
 
 
 def _sample_job(args):
-    n, eps, playouts, every, seed = args
-    return sample_positions(n, eps, playouts, every, seed)
+    n, eps, playouts, every, seed, versions = args
+    return sample_positions(n, eps, playouts, every, seed, versions)
 
 
 def predict(net, feats: np.ndarray):
@@ -188,28 +202,33 @@ def main():
 
     nets = [p for p in args.nets.split(",") if p]
     epsilons = [float(e) for e in args.epsilons.split(",") if e]
+    loaded = {path: PolicyValueNet.load(path) for path in nets}
+    net_version = {path: version_for_dim(net.cfg.input_dim) for path, net in loaded.items()}  # each net: its own encoder
+    versions = sorted(set(net_version.values())) or [FEATURE_VERSION_LATEST]
     t0 = time.time()
     datasets = {}
     for ei, eps in enumerate(epsilons):
         chunks = max(1, min(args.workers, args.positions))
         per = [args.positions // chunks + (1 if i < args.positions % chunks else 0) for i in range(chunks)]
-        jobs = [(n, eps, args.playouts, args.every, args.seed * 100 + ei * 10 + i) for i, n in enumerate(per) if n > 0]
+        jobs = [(n, eps, args.playouts, args.every, args.seed * 100 + ei * 10 + i, versions)
+                for i, n in enumerate(per) if n > 0]
         if len(jobs) == 1:
             parts = [_sample_job(jobs[0])]
         else:
             with mp.get_context("fork").Pool(len(jobs)) as pool:
                 parts = pool.map(_sample_job, jobs)
-        data = {k: np.concatenate([p[k] for p in parts]) for k in ("feats", "z", "margin", "turn", "need", "dkind")}
+        keys = [feats_key(v) for v in versions] + ["z", "margin", "turn", "need", "dkind"]
+        data = {k: np.concatenate([p[k] for p in parts]) for k in keys}
         data["games"] = sum(p["games"] for p in parts)
         datasets[eps] = data
         print(f"[{time.time() - t0:5.0f}s] eps={eps:g}: {len(data['z'])} positions from {data['games']} games, "
               f"{args.playouts} playouts each; mean target {data['z'].mean():+.3f}, z_var {np.mean(data['z'] ** 2):.3f}",
               flush=True)
     for path in nets:
-        net = PolicyValueNet.load(path)
+        net = loaded[path]
         for eps in epsilons:
             data = datasets[eps]
-            v_pred, m_pred = predict(net, data["feats"])
+            v_pred, m_pred = predict(net, data[feats_key(net_version[path])])
             report(path, eps, data, v_pred, m_pred)
     print(f"done in {time.time() - t0:.0f}s", flush=True)
 

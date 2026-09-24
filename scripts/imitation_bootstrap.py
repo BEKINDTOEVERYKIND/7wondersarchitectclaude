@@ -2,6 +2,9 @@
 """Imitation bootstrap: heuristic self-play data -> network, with a held-out set and evaluation.
 
 Usage: python scripts/imitation_bootstrap.py --run-dir runs/v3 --games 20000 --holdout-games 1000
+
+``--feature-version`` (default: the latest, 2) selects the input encoding of the data and of the new
+network; ``--feature-version 1`` reproduces the 581-feature networks such as ``models/imitation_v7.pt``.
 """
 import argparse
 import glob
@@ -12,9 +15,9 @@ import numpy as np
 import torch
 
 from sevenwa.engine.actions import Actions
-from sevenwa.nn.features import FEATURE_SIZE
+from sevenwa.nn.features import FEATURE_VERSION_LATEST, feature_size
 from sevenwa.nn.model import compute_loss
-from sevenwa.train.pipeline import PipelineConfig, new_network
+from sevenwa.train.pipeline import PipelineConfig, check_feature_width, new_network
 from sevenwa.train.replay import ReplayBuffer
 from sevenwa.train.selfplay import run_imitation
 from sevenwa.train.trainer import TrainConfig, Trainer
@@ -35,17 +38,24 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--batch", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--feature-version", type=int, default=FEATURE_VERSION_LATEST,
+                    help="input feature encoding of the data and the network (1 = 581 features, 2 = + EXPERT block)")
     args = ap.parse_args()
+    n_feats = feature_size(args.feature_version)
     data_dir = os.path.join(args.run_dir, "data")
     hold_dir = os.path.join(args.run_dir, "holdout")
     os.makedirs(os.path.join(args.run_dir, "ckpt"), exist_ok=True)
     t0 = time.time()
-    run_imitation(args.games, data_dir, 0, args.workers, seed=args.seed, epsilon=args.epsilon)
-    run_imitation(args.holdout_games, hold_dir, 0, args.workers, seed=args.seed + 10_000_000, epsilon=args.epsilon)
-    buf = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+    run_imitation(args.games, data_dir, 0, args.workers, seed=args.seed, epsilon=args.epsilon,
+                  feature_version=args.feature_version)
+    run_imitation(args.holdout_games, hold_dir, 0, args.workers, seed=args.seed + 10_000_000, epsilon=args.epsilon,
+                  feature_version=args.feature_version)
+    buf = ReplayBuffer(n_feats, Actions.NUM)
     n = buf.load_shards(os.path.join(data_dir, "gen0000_*.npz"))
-    ho = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+    check_feature_width(buf, n_feats, data_dir)
+    ho = ReplayBuffer(n_feats, Actions.NUM)
     ho.load_shards(os.path.join(hold_dir, "gen0000_*.npz"))
+    check_feature_width(ho, n_feats, hold_dir)
     hb = ho.sample(min(len(ho), 20000), np.random.default_rng(0))
     print(f"train samples {n}, holdout {len(ho)} ({time.time() - t0:.0f}s)", flush=True)
 
@@ -56,7 +66,8 @@ def main():
                                     torch.from_numpy(hb.z), torch.from_numpy(hb.margin))
         return {k: round(v, 3) for k, v in parts.items()}
 
-    net = new_network(PipelineConfig(net_width=args.width, net_depth=args.depth, net_dropout=args.dropout))
+    net = new_network(PipelineConfig(net_width=args.width, net_depth=args.depth, net_dropout=args.dropout,
+                                     feature_version=args.feature_version))
     torch.set_num_threads(4)
     trainer = Trainer(net, TrainConfig(batch_size=args.batch, epochs=args.epochs, lr=args.lr, weight_decay=args.weight_decay,
                                        num_threads=4))

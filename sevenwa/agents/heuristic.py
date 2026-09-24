@@ -143,12 +143,20 @@ class HeuristicParams:
     future_battle_weight: float = 0.5  # weight of battles after the next one (permanent shields only)
     perm_shield_bonus: float = 0.4   # hornless shields survive battles
     early_horn_discount: float = 0.0  # horn cards are worth (1 - d * turns_left / max_turns) of their battle value
+    battle_response: float = 1.0     # a horn card that fights the Battle this turn is worth o1 - pb * r * o0 (o0: the
+    #                                  outcome at today's shields); r < 1: without the card the opponent could still
+    #                                  change the shield counts before the Battle (1.0 = previous behaviour); paired
+    #                                  A/B 2026-09-24 (6 000 games, seed 29): 0.75 -> 49.5 %, 0.5 -> 48.6 %: kept at 1.0
     # --- denial / lookahead
     deny: float = 0.55               # weight of the opponent's best reply (visible cards)
     deny_reveal: float = 0.3         # weight of the expected value of the card my pick reveals to them
     deny_hidden_central: float = -1.0  # weight of a central top I know (Cat peek) but the opponent does not; < 0: deny
     pick_rate: float = 0.7           # useful resource cards per turn (game-length estimate)
     max_turns: float = 16.0
+    stall_horizon: float = 0.0       # weight w of the stall-aware horizon: a player at 4 stages whose completion would
+    #                                  lose stalls, so its cards_needed stops bounding the game length (the other
+    #                                  player's does); horizon = (1 - w) * previous + w * stall-aware (0 = previous);
+    #                                  paired A/B 2026-09-24 (6 000 games, seed 29): w = 1 -> 48.8 % [47.5-50.1]: off
     # --- payment
     pay_coin_penalty: float = 0.3    # keep wild coins when possible
     pay_econ_bonus: float = 0.8      # spending a doubled coin saves a card
@@ -455,8 +463,13 @@ class _Ctx:
         v1 = _make_view(s, 1)
         self.views = (v0, v1)
         rate = P.pick_rate
-        tl = min(v0.cards_needed, v1.cards_needed) / rate
+        n0 = v0.cards_needed
+        n1 = v1.cards_needed
+        n = n0 if n0 < n1 else n1
         cards_left = (s.deck_size[0] + s.deck_size[1] + s.deck_size[2] + 1) * 0.5
+        if P.stall_horizon and (v0.n_built == 4 or v1.n_built == 4):
+            n += P.stall_horizon * (self._stall_needed(cards_left * rate) - n)
+        tl = n / rate
         if cards_left < tl:
             tl = cards_left
         if tl < 1.0:
@@ -497,6 +510,21 @@ class _Ctx:
         self._cardvals: List[Optional[List[float]]] = [None, None]
         self._build: List[dict] = [{}, {}]
         self._ends: List[Optional[List[bool]]] = [None, None]
+
+    def _stall_needed(self, fallback: float) -> float:
+        """Cards still needed until the game ends, ignoring a player who *stalls*: at 4 stages, the
+        5th stage (the only target) would lose the game at the current scores, so that player avoids
+        completing it and does not end the game.  ``fallback`` (the cards left, in cards-needed units)
+        when both players stall.  Uses only the views and ``fifth_wins`` (no token values), so it is
+        safe to call from ``__init__``."""
+        best = fallback
+        for p in (0, 1):
+            v = self.views[p]
+            if v.n_built == 4 and v.tgt is not None and not self.fifth_wins(p, v.tgt):
+                continue
+            if v.cards_needed < best:
+                best = v.cards_needed
+        return best
 
     # ---- stage construction ------------------------------------------------------------
     def plain_value(self, p: int, stage) -> float:
@@ -895,7 +923,7 @@ class _Ctx:
                 val = o1 - base_o
             elif conflict + h >= ntok:
                 # the battle is fought at the end of this turn: certain outcome instead of pb-weighted
-                val = o1 - pb * base_o
+                val = o1 - pb * P.battle_response * base_o
             else:
                 pb2 = pb + h * P.horn_accel
                 if pb2 > P.pb_max:

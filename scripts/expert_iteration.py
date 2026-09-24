@@ -13,6 +13,10 @@ One round:
 Usage:
   python scripts/expert_iteration.py --teacher runs/v4/ckpt/champion.pt --run-dir runs/ei1 \
       --games 2400 --sims 96 --workers 3 --imitation-glob 'runs/v4/imitation/gen0000_*.npz'
+
+Feature versions: the teacher's ``cfg.input_dim`` fixes the encoding of everything in the round — the
+search games are generated with the teacher's encoder, the buffers are sized by it, and imitation /
+extra shards written with another version are rejected with a clear error.
 """
 import argparse
 import glob
@@ -26,11 +30,12 @@ import torch
 from sevenwa.agents.factory import make_agent
 from sevenwa.engine.actions import Actions
 from sevenwa.engine.env import make_env
-from sevenwa.nn.features import FEATURE_SIZE
+from sevenwa.nn.features import version_for_dim
 from sevenwa.nn.model import PolicyValueNet, compute_loss
 from sevenwa.search.mcts import MCTSConfig
 from sevenwa.train.arena import play_match
 from sevenwa.train.replay import ReplayBuffer
+from sevenwa.train.pipeline import check_feature_width
 from sevenwa.train.selfplay import SelfPlayConfig, run_selfplay
 from sevenwa.train.trainer import TrainConfig, Trainer
 
@@ -85,6 +90,9 @@ def main():
             f.write(line + "\n")
 
     t0 = time.time()
+    teacher = PolicyValueNet.load(args.teacher)
+    n_feats = teacher.cfg.input_dim
+    log(f"teacher {args.teacher}: {n_feats} input features (feature version {version_for_dim(n_feats)})")
     data_dir = os.path.join(args.run_dir, "data")
     if not args.skip_generation:
         cfg = SelfPlayConfig(num_simulations=args.sims, batch_size=8, root_mode="gumbel", temperature_moves=args.temp_moves,
@@ -95,19 +103,23 @@ def main():
     for g in args.extra_search_glob:
         shards += sorted(glob.glob(g))
     # hold out whole worker shards' tail: simplest reproducible split is by sample index
-    train = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
-    hold = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+    train = ReplayBuffer(n_feats, Actions.NUM)
+    hold = ReplayBuffer(n_feats, Actions.NUM)
     rng = np.random.default_rng(args.seed)
     for p in shards:
         d = np.load(p)
         n = len(d["z"])
+        if d["feats"].ndim != 2 or d["feats"].shape[1] != n_feats:
+            raise ValueError(f"{p}: {d['feats'].shape[-1]} features, but the teacher expects {n_feats} "
+                             f"(feature version {version_for_dim(n_feats)})")
         cut = int(n * (1 - args.holdout_fraction))
         train.add_game(d["feats"][:cut], d["mask"][:cut], d["pi"][:cut], d["z"][:cut], d["margin"][:cut], 1)
         hold.add_game(d["feats"][cut:], d["mask"][cut:], d["pi"][cut:], d["z"][cut:], d["margin"][cut:], 1)
     n_search = len(train)
     if args.imitation_glob:
-        imit = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+        imit = ReplayBuffer(n_feats, Actions.NUM)
         imit.load_shards(args.imitation_glob)
+        check_feature_width(imit, n_feats, args.imitation_glob)
         want = int(n_search * args.imitation_fraction / max(1e-9, 1 - args.imitation_fraction))
         b = imit.sample(min(want, len(imit)), rng)
         train.add_game(b.feats, b.mask, b.pi, b.z, b.margin, 0)
@@ -115,7 +127,6 @@ def main():
     else:
         log(f"training set: {n_search} search samples; holdout {len(hold)}")
 
-    teacher = PolicyValueNet.load(args.teacher)
     log(f"teacher on search holdout: {holdout_loss(teacher, hold)}")
     cand = PolicyValueNet.load(args.teacher)
     torch.set_num_threads(4)

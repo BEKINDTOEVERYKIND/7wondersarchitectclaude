@@ -56,15 +56,16 @@ def cmd_selfplay(args):
 
 def cmd_train(args):
     from .engine.actions import Actions
-    from .nn.features import FEATURE_SIZE
     from .nn.model import PolicyValueNet
-    from .train.pipeline import PipelineConfig, new_network
+    from .train.pipeline import PipelineConfig, check_feature_width, new_network
     from .train.replay import ReplayBuffer
     from .train.trainer import TrainConfig, Trainer
-    buf = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
-    n = buf.load_shards(args.data)
-    print(f"loaded {n} samples: {buf.stats()}")
+    # size everything from the network (an --init checkpoint keeps its own feature version)
     net = PolicyValueNet.load(args.init) if args.init else new_network(PipelineConfig(net_width=args.width, net_depth=args.depth))
+    buf = ReplayBuffer(net.cfg.input_dim, Actions.NUM)
+    n = buf.load_shards(args.data)
+    check_feature_width(buf, net.cfg.input_dim)
+    print(f"loaded {n} samples: {buf.stats()}")
     tr = Trainer(net, TrainConfig(batch_size=args.batch, epochs=args.epochs, lr=args.lr))
     print(tr.train(buf, np.random.default_rng(args.seed)))
     net.save(args.out)

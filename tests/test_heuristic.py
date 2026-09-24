@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from sevenwa.agents.base import Agent
-from sevenwa.agents.heuristic import (HeuristicAgent, HeuristicParams, heuristic_action, heuristic_prior,
+from sevenwa.agents.heuristic import (HeuristicAgent, HeuristicParams, _Ctx, heuristic_action, heuristic_prior,
                                       score_actions)
 from sevenwa.agents.random_agent import RandomAgent
 from sevenwa.engine.actions import Actions as A
@@ -527,3 +527,66 @@ def test_new_tunables_default_to_the_previous_behaviour():
     d4b = dict(zip(*score_actions(t4, replace(P, arch_last_pick=0.0))))
     assert d4b[arch] < d4[arch] - 1.0 and d4b[_tok("Decor")] == d4[_tok("Decor")]
     assert dict(zip(*score_actions(t4, replace(P, arch_last_pick=1.0)))) == d4
+
+
+# --------------------------------------------------------------------------- horizon / battle timing
+def test_stall_horizon_ignores_a_player_whose_completion_loses():
+    """P0 (Giza, 4 stages = 22 VP) holds 3 different resources: one card from the 5th stage, but
+    completing it (30 VP) loses to P1 (Rhodes, 1 stage + 4 civ3 + 8 civ2cat = 32 VP), so P0 stalls and
+    the game does not end within ~1 turn.  The previous horizon min(cards_needed) / pick_rate
+    collapsed to ~1.4 turns for *both* players; the stall-aware one uses P1's 12 missing cards."""
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    assert P.stall_horizon == 0.0  # default: the previous horizon (the A/B did not favour the stall-aware one)
+    hand = {"wood": 1, "stone": 1, "clay": 1}
+
+    def opp(t):
+        t.built[1] = first_n(1)
+        _give_p1(t, "civ3", 4)
+        _give_p1(t, "civ2cat", 8)
+    t = _p0_with_cards(hand, stage=4, edit=opp)  # the check ends P0's turn: P1 (the leader) is to move
+    assert t.dkind == D_PICK and t.to_move() == 1 and t.scores() == (22, 32)
+    old = _Ctx(t, replace(P, stall_horizon=0.0))
+    new = _Ctx(t, replace(P, stall_horizon=1.0))
+    assert old.views[0].cards_needed == 1 and old.views[1].cards_needed == 12
+    assert not old.fifth_wins(0, old.views[0].tgt)
+    assert old.tl == pytest.approx(1.0 / P.pick_rate) and _Ctx(t, P).tl == old.tl
+    assert new.tl > 10.0 and new.sci_time == 1.0 and new.pb > old.pb
+    # P1's time-scaled values follow the horizon (Urbanism: extra picks per remaining turn)
+    urb = TOKEN_BY_NAME["Urbanism"].id
+    assert new.token_values(1)[urb] > 5 * old.token_values(1)[urb]
+    # a fractional weight interpolates the cards-needed bound
+    half = _Ctx(t, replace(P, stall_horizon=0.5))
+    assert half.tl == pytest.approx((1 + 0.5 * (12 - 1)) / P.pick_rate)
+    # P0 still refuses the losing completion (the horizon does not touch the 5th-stage penalty)
+    for k in ("papyrus", "glass", "coin"):
+        assert new.card_values(0)[K[k].id] < -P.lose_penalty / 2, k
+    # control: when completing *wins*, the 1-card horizon is right and nothing changes
+    t2 = _p0_with_cards(hand, stage=4)
+    assert t2.dkind == D_PICK and t2.to_move() == 1 and t2.scores() == (22, 0)
+    a, b = _Ctx(t2, replace(P, stall_horizon=0.0)), _Ctx(t2, replace(P, stall_horizon=1.0))
+    assert a.fifth_wins(0, a.views[0].tgt) and a.tl == b.tl == pytest.approx(1.0 / P.pick_rate)
+    assert dict(zip(*score_actions(t2, replace(P, stall_horizon=1.0)))) == dict(zip(*score_actions(t2, P)))
+
+
+def test_battle_response_scales_the_counterfactual_battle():
+    """At conflict 2 a horn card fights the Battle this turn.  P1 holds a hornless shield, P0 none:
+    taking the horn card turns a pb-weighted loss into a tie, worth o1 - pb * r * o0 with r =
+    ``battle_response`` (1.0 = previous behaviour)."""
+    base = _forced_start("shield_h1", "civ3")
+    t = base._copy()
+    t._legal = base._legal
+    t.conflict = 2
+    _give_p1(t, "shield", 1)
+    P = replace(HeuristicParams(), tie_noise=0.0)
+    assert P.battle_response == 1.0
+    h1 = K["shield_h1"].id
+    vals = {}
+    for r in (1.0, 0.75, 0.5):
+        c = _Ctx(t, replace(P, battle_response=r))
+        vals[r] = (c.card_values(0)[h1], c.pb)
+    pb = vals[1.0][1]
+    assert 0.0 < pb < 1.0
+    o0 = -t.rules.military_token_vp * (1 if t.rules.double_vs_zero_requires_two else 2)  # 0 vs 1 shield
+    for r, (v, _) in vals.items():
+        assert v == pytest.approx(0.0 - pb * r * o0), r
+    assert vals[1.0][0] > vals[0.75][0] > vals[0.5][0] > 0.0

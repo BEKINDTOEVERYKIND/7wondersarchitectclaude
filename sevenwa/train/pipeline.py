@@ -5,6 +5,10 @@ All artefacts go to ``runs/<name>/``:
   ckpt/genXXXX.pt       candidate after training on generation XXXX
   ckpt/champion.pt      current best network (used for self-play)
   metrics.jsonl         one JSON line per generation
+
+Feature versions: a new run builds its network on the latest feature encoding
+(``PipelineConfig.feature_version``); a resumed run keeps the version of its champion (read from
+the checkpoint's ``cfg.input_dim``), and every shard, replay buffer and evaluator of the run uses it.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ import torch
 from ..agents.factory import make_agent
 from ..engine.actions import Actions
 from ..engine.env import make_env
-from ..nn.features import ENTITY_SLICES, FEATURE_SIZE
+from ..nn.features import FEATURE_VERSION_LATEST, entity_slices, feature_size, version_for_dim
 from ..nn.model import NetConfig, PolicyValueNet
 from ..search.mcts import MCTSConfig
 from .arena import play_match
@@ -47,6 +51,7 @@ class PipelineConfig:
     net_depth: int = 4
     net_trunk: str = "resmlp"
     net_dropout: float = 0.1
+    feature_version: int = FEATURE_VERSION_LATEST  # input encoding of NEW networks (a resumed champion keeps its own)
     selfplay: SelfPlayConfig = field(default_factory=SelfPlayConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     gate_games: int = 60
@@ -97,18 +102,35 @@ def _log_factory(run_dir: str):
 
 
 def new_network(cfg: PipelineConfig) -> PolicyValueNet:
-    ncfg = NetConfig(input_dim=FEATURE_SIZE, num_actions=Actions.NUM, trunk=cfg.net_trunk, width=cfg.net_width,
-                     depth=cfg.net_depth, dropout=cfg.net_dropout, entity_slices=list(ENTITY_SLICES))
+    """A fresh network on feature encoding ``cfg.feature_version`` (default: the latest).  The attention
+    trunk gets the entity slices of that version (version 2 adds the EXPERT block as its own entity)."""
+    version = cfg.feature_version
+    ncfg = NetConfig(input_dim=feature_size(version), num_actions=Actions.NUM, trunk=cfg.net_trunk, width=cfg.net_width,
+                     depth=cfg.net_depth, dropout=cfg.net_dropout, entity_slices=entity_slices(version))
     return PolicyValueNet(ncfg)
+
+
+def net_feature_version(net: PolicyValueNet) -> int:
+    """Feature version a network was built for (from ``cfg.input_dim``; raises for an unknown size)."""
+    return version_for_dim(net.cfg.input_dim)
+
+
+def check_feature_width(buf: ReplayBuffer, input_dim: int, what: str = "replay buffer") -> None:
+    """Raise a clear error when loaded shards were written with another feature version than the network's."""
+    for f in buf.feats:
+        if f.ndim != 2 or f.shape[1] != input_dim:
+            raise ValueError(f"{what}: shards have {f.shape[-1]} features but the network expects {input_dim} "
+                             f"(feature version {version_for_dim(input_dim)}); regenerate the data with that version")
 
 
 def fresh_data_loss(net: PolicyValueNet, shard_glob: str) -> Dict[str, float]:
     """Loss of ``net`` on data it has never trained on (the newest generation's shards) — the
     generalisation diagnostic that exposes replay-window overfitting."""
     from ..nn.model import compute_loss
-    buf = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+    buf = ReplayBuffer(net.cfg.input_dim, Actions.NUM)
     if buf.load_shards(shard_glob) == 0:
         return {}
+    check_feature_width(buf, net.cfg.input_dim, shard_glob)
     b = buf.sample(min(len(buf), 8192), np.random.default_rng(0))
     net.eval()
     with torch.no_grad():
@@ -144,32 +166,40 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         with open(metrics_path, "a") as f:
             f.write(json.dumps(m) + "\n")
 
-    net = new_network(cfg)
-    log(f"network: {cfg.net_trunk} width {cfg.net_width} depth {cfg.net_depth}, {net.num_parameters():,} parameters; "
-        f"features {FEATURE_SIZE}, actions {Actions.NUM}")
-    buffer = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
     start_gen = 0
+    if os.path.exists(champion_path):
+        net = PolicyValueNet.load(champion_path)  # a resumed run keeps its champion's feature version
+    else:
+        net = new_network(cfg)
+    version = net_feature_version(net)
+    n_feats = net.cfg.input_dim
+    log(f"network: {net.cfg.trunk} width {net.cfg.width} depth {net.cfg.depth}, {net.num_parameters():,} parameters; "
+        f"features {n_feats} (version {version}), actions {Actions.NUM}")
+    buffer = ReplayBuffer(n_feats, Actions.NUM)
 
     # ---- resume -----------------------------------------------------------
     if os.path.exists(champion_path):
-        net = PolicyValueNet.load(champion_path)
         existing = sorted(f for f in os.listdir(data_dir) if f.endswith(".npz"))
         if existing:
             start_gen = max(int(f[3:7]) for f in existing) + 1
         buffer.load_shards(os.path.join(data_dir, "gen*.npz"), min_generation=max(0, start_gen - cfg.window_generations))
+        check_feature_width(buffer, n_feats, data_dir)
         log(f"resumed champion from {champion_path}; next generation {start_gen}; buffer {len(buffer)} samples")
     else:
         # ---- bootstrap from rollout-MCTS games ------------------------------
         if cfg.bootstrap_games > 0:
             if cfg.bootstrap_mode == "imitation":
                 log(f"bootstrap: {cfg.bootstrap_games} ε-greedy heuristic games (imitation targets)")
-                run_imitation(cfg.bootstrap_games, data_dir, 0, cfg.num_workers, seed=cfg.seed, epsilon=cfg.bootstrap_epsilon, log=log)
+                run_imitation(cfg.bootstrap_games, data_dir, 0, cfg.num_workers, seed=cfg.seed, epsilon=cfg.bootstrap_epsilon,
+                              log=log, feature_version=version)
             else:
                 log(f"bootstrap: {cfg.bootstrap_games} rollout-MCTS games ({cfg.bootstrap_simulations} sims, heuristic playouts)")
                 bcfg = SelfPlayConfig(**{**asdict(cfg.selfplay), "evaluator": "rollout", "num_simulations": cfg.bootstrap_simulations,
                                          "batch_size": 1})
-                run_selfplay(bcfg, cfg.bootstrap_games, None, data_dir, 0, cfg.num_workers, seed=cfg.seed, log=log)
+                run_selfplay(bcfg, cfg.bootstrap_games, None, data_dir, 0, cfg.num_workers, seed=cfg.seed, log=log,
+                             feature_version=version)
             buffer.load_shards(os.path.join(data_dir, "gen0000_*.npz"))
+            check_feature_width(buffer, n_feats, data_dir)
             log(f"bootstrap buffer: {buffer.stats()}")
             trainer = Trainer(net, TrainConfig(**{**asdict(cfg.train), "epochs": cfg.bootstrap_epochs}))
             stats = trainer.train(buffer, rng, log=log)
@@ -184,8 +214,9 @@ def run_pipeline(cfg: PipelineConfig) -> None:
         log(f"=== generation {gen} ===")
         run_selfplay(cfg.selfplay, cfg.games_per_generation, champion_path, data_dir, gen, cfg.num_workers,
                      seed=cfg.seed + gen * 100_000, log=log)
-        buffer = ReplayBuffer(FEATURE_SIZE, Actions.NUM)
+        buffer = ReplayBuffer(n_feats, Actions.NUM)
         buffer.load_shards(os.path.join(data_dir, "gen*.npz"), min_generation=max(0, gen - cfg.window_generations + 1))
+        check_feature_width(buffer, n_feats, data_dir)
         log(f"replay buffer: {buffer.stats()}")
 
         candidate = PolicyValueNet.load(champion_path)
