@@ -511,7 +511,29 @@ training stack (five readers, two skeptical verifiers per finding) led to these 
   heuristic quantities per position (graded cards-missing per stage, cards needed, the
   heuristic's card / token / build / shield values for both players, horizon, battle
   probability and the heuristic prior), pinned to today's heuristic parameters.  Version-1
-  networks load and play bit-identically (`encoder_for_dim`).
+  networks load and play bit-identically (`encoder_for_dim`).  **Result: no gain.**  An
+  imitation network on v2 inputs (`runs/v9`: 40 000 games, 384×5, 3 epochs; the replay buffer
+  had to learn to consolidate without a second copy to fit 2.4 M × 688 floats in 16 GB)
+  copies the teacher's policy almost exactly (held-out agreement 96 % vs 85 % for v7) but its
+  value head is no better off-distribution (value probe below) and it does not play better:
+
+| comparison (paired, both seats) | result |
+|---|---|
+| `net:v9:300` vs `net:imitation_v7:300` | 18-22 (45 %) |
+| `hybrid:v9:300:0.5:margin=0.5` vs the same with `imitation_v7` | 15-17 (47 %) |
+| `hybrid:value_v8:300:0.5:margin=0.5` vs the same with `imitation_v7` | 8-8 |
+| `hybrid:imitation_v7:300:0.75:margin=0.5` vs `…:0.5:margin=0.5` | 8-8 |
+| `hybrid:imitation_v7:300:0.5:margin=1.0` vs `…:margin=0.5` | 9-15 (38 %) |
+
+| value probe (MSE vs 8-playout means, 400 positions; ε = 0.1 / 0.5 sampling games) | ε 0.1 | ε 0.5 |
+|---|---|---|
+| `imitation_v7` | 0.160 | 0.183 |
+| `value_v8` (playout-averaged targets) | **0.117** | **0.139** |
+| `v9` (expert features, game-outcome targets) | 0.151 | 0.170 |
+
+  The value head is limited by its *targets* (single noisy game outcomes), not by missing
+  inputs; and inside the hybrid neither a better value head nor a different blend weight moves
+  the result — the hybrid's strength comes from the heuristic playouts and the search depth.
 
 ### Reproducing
 
